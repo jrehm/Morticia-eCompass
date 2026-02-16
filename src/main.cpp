@@ -74,11 +74,13 @@ class DeviationInterpolator : public CurveInterpolator {
  public:
   DeviationInterpolator(String config_path = "")
       : CurveInterpolator(NULL, config_path) {
-    // Default: no deviation correction
-    // After swing, uncomment and populate:
-    //   clear_samples();
-    //   add_sample(CurveInterpolator::Sample(0.0, 0.0));
-    //   add_sample(CurveInterpolator::Sample(6.283, 6.283));
+    // Default: 1:1 passthrough (no deviation correction).
+    // After a compass swing, replace with actual deviation values
+    // via the SensESP web UI, or hard-code here.
+    clear_samples();
+    add_sample(CurveInterpolator::Sample(0.0, 0.0));
+    add_sample(CurveInterpolator::Sample(3.14159, 3.14159));
+    add_sample(CurveInterpolator::Sample(6.28318, 6.28318));
   }
 };
 
