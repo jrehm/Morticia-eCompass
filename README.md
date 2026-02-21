@@ -51,6 +51,22 @@ The BRKT-STBC-AGM01 uses different default addresses than the Adafruit 3463:
 5. Configure WiFi and Signal K server via the web interface
 6. Perform magnetic calibration by rotating sensor through all axes
 
+## Watchdog & Reliability
+
+The firmware includes two watchdog mechanisms for unattended operation:
+
+- **Hardware watchdog (120s):** Reboots the ESP32 if the main event loop
+  stalls completely (I2C bus hang, stack overflow, etc.). Uses the ESP-IDF
+  task watchdog timer, fed every 15 seconds.
+- **Connectivity watchdog (5 min):** Monitors the Signal K WebSocket
+  connection. If disconnected for more than 5 minutes — e.g., after a
+  Signal K server restart where the underlying `esp_websocket_client`
+  fails to fire a disconnect callback — the ESP32 reboots to force a
+  clean reconnection.
+
+Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
+`SK_CONNECTION_TIMEOUT_MS` at the top of `src/main.cpp`.
+
 ## Magnetic Calibration
 
 After power-on, rotate the sensor through various orientations for 15-30 seconds.

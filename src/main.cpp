@@ -15,6 +15,9 @@
 
 #include <memory>
 
+// Connectivity watchdog
+#include "esp_task_wdt.h"
+
 // SensESP v3 headers
 #include "sensesp.h"
 #include "sensesp/sensors/sensor.h"
@@ -67,6 +70,16 @@
 #define CALIBRATION_REPORTING_INTERVAL_MS (4000)
 #define RATE_REPORTING_INTERVAL_MS        (200)
 
+// Connectivity watchdog: reboot ESP32 if Signal K connection
+// is lost for this many milliseconds. Handles edge cases where
+// the SKWSClient retry loop gets stuck in a non-disconnected
+// state (e.g., after Signal K server restart).
+#define SK_CONNECTION_TIMEOUT_MS (5 * 60 * 1000)  // 5 minutes
+
+// Hardware watchdog: reboot if main loop stalls completely.
+// This catches hard lockups (I2C bus hang, stack overflow, etc.)
+#define HW_WATCHDOG_TIMEOUT_S (120)  // 2 minutes
+
 using namespace sensesp;
 
 // Deviation Table - enter via web UI or hard-code after compass swing
@@ -101,6 +114,51 @@ void setup() {
       ->enable_free_mem_sensor()
       ->enable_system_hz_sensor()
       ->get_app();
+
+  // ========== WATCHDOG SETUP ==========
+  // Hardware watchdog: reboots if the main event loop stalls
+  // (I2C bus hang, stack overflow, infinite loop, etc.)
+  esp_task_wdt_config_t wdt_config = {
+      .timeout_ms = HW_WATCHDOG_TIMEOUT_S * 1000,
+      .idle_core_mask = 0,  // don't watch idle tasks
+      .trigger_panic = true  // reboot on timeout
+  };
+  esp_task_wdt_reconfigure(&wdt_config);
+  esp_task_wdt_add(NULL);  // monitor the main (loopTask) task
+  ESP_LOGI("eCompass", "Hardware watchdog enabled (%ds timeout)",
+           HW_WATCHDOG_TIMEOUT_S);
+
+  // Connectivity watchdog: reboots if Signal K connection is lost
+  // for longer than SK_CONNECTION_TIMEOUT_MS. This catches the edge
+  // case where SKWSClient's retry loop gets stuck in Authorizing or
+  // Connecting state after a Signal K server restart.
+  static unsigned long last_sk_connected_ms = millis();
+
+  event_loop()->onRepeat(15000, []() {
+    // Feed the hardware watchdog — proves the event loop is alive
+    esp_task_wdt_reset();
+
+    // Check Signal K connection health
+    auto ws_client = sensesp_app->get_ws_client();
+    if (ws_client && ws_client->is_connected()) {
+      last_sk_connected_ms = millis();
+    } else {
+      unsigned long disconnected_ms = millis() - last_sk_connected_ms;
+      if (disconnected_ms > SK_CONNECTION_TIMEOUT_MS) {
+        ESP_LOGW("eCompass",
+                 "Signal K disconnected for %lu s — rebooting",
+                 disconnected_ms / 1000);
+        delay(100);  // let the log message flush
+        ESP.restart();
+      } else if (disconnected_ms > 30000) {
+        // Log periodic status while disconnected
+        ESP_LOGI("eCompass",
+                 "Signal K disconnected for %lu s (reboot at %d s)",
+                 disconnected_ms / 1000,
+                 SK_CONNECTION_TIMEOUT_MS / 1000);
+      }
+    }
+  });
 
   // Signal K Paths
   const char* kSKPathHeadingCompass  = "navigation.headingCompass";
