@@ -50,8 +50,8 @@ wires (22–24 AWG, twisted pairs) run out to the shunts.
 | IN+ / IN- | Shunt sense | External shunt sense points |
 
 **Address configuration:**
-- Battery INA226 (0x40): A0 and A1 pins floating (default)
-- Solar INA226 (0x41): A0 pin tied to VS (VCC); A1 floating
+- Solar INA226 (0x40): A0 and A1 pins floating (default)
+- Battery INA226/INA228 (0x41): A0 pin tied to VS (VCC); A1 floating
 
 **Shunt placement:**
 - **Battery shunt:** On the battery negative, between the battery terminal
@@ -69,8 +69,8 @@ installation — if the sign is reversed, swap IN+ and IN- at the shunt
 |---------|--------|-------|
 | 0x1E | FXOS8700CQ (accel/mag) | BRKT default; differs from Adafruit 0x1F |
 | 0x20 | FXAS21002C (gyro) | BRKT default; differs from Adafruit 0x21 |
-| 0x40 | INA226/INA228 — battery shunt | INA228 target when available |
-| 0x41 | INA226 — solar shunt | A0 tied to VS on board |
+| 0x40 | INA226 — solar shunt | A0, A1 floating (default) |
+| 0x41 | INA226/INA228 — battery shunt | A0 tied to VS on board; INA228 target when available |
 
 ## Signal K Paths
 
