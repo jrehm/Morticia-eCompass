@@ -11,10 +11,9 @@ trimaran "Morticia", reporting to Signal K via WiFi.
 **Orientation**
 - BRKT-STBC-AGM01 (NXP FXOS8700CQ accel/mag + FXAS21002C gyro)
 
-**Power monitoring** *(hardware pending installation)*
-- INA226 @ 0x40 — battery shunt (interim; INA228 is the target, see below)
-- INA226 @ 0x41 — solar charge controller shunt
-- External shunt resistors: 20A/75mV (3.75mΩ) at both positions
+**Power monitoring**
+- MJKDZ INA226 @ 0x40 — solar charge controller *(installed)*
+- INA226/INA228 @ 0x41 — house battery *(pending installation)*
 
 **Network**
 - OpenPlotter Raspberry Pi 4 running Signal K at 192.168.8.212:3000
@@ -37,31 +36,49 @@ trimaran "Morticia", reporting to Signal K via WiFi.
 
 ### INA226 (power sensors) → SH-ESP32
 
-Both INA226 boards share the same I2C bus as the BRKT sensor. Boards and
-sense wires live inside the enclosure with the SH-ESP32; only thin sense
-wires (22–24 AWG, twisted pairs) run out to the shunts.
+Both INA226 boards share the same I2C bus. I2C header pins (SDA, SCL, VCC, GND)
+connect to the SH-ESP32 directly inside the enclosure.
 
 | INA226 Pin | Signal | SH-ESP32 |
 |------------|--------|----------|
-| VBS / VCC | Power | 3.3V |
+| VCC | Power | 3.3V |
 | GND | Ground | GND |
 | SDA | I2C Data | SDA (GPIO 16) |
 | SCL | I2C Clock | SCL (GPIO 17) |
-| IN+ / IN- | Shunt sense | External shunt sense points |
 
 **Address configuration:**
-- Solar INA226 (0x40): A0 and A1 pins floating (default)
+- Solar INA226 (0x40): A0 and A1 floating (default)
 - Battery INA226/INA228 (0x41): A0 pin tied to VS (VCC); A1 floating
 
-**Shunt placement:**
-- **Battery shunt:** On the battery negative, between the battery terminal
-  and the main negative bus bar. Captures all current in/out of the battery.
-- **Solar shunt:** On the negative output wire of the solar charge controller,
-  before it reaches the main negative bus bar.
+### MJKDZ INA226 solar sensor — screw terminal wiring
 
-**Current sign convention:** Positive current = charging. Verify after
-installation — if the sign is reversed, swap IN+ and IN- at the shunt
-(hardware fix, no code change needed).
+The MJKDZ board is a **high-side measurement board** with an onboard 2mΩ shunt
+(R002). Current flows through the board — no external shunt resistor is needed
+at this position. The three screw terminals are:
+
+| Terminal | Connect to |
+|----------|-----------|
+| V+ (green) | Solar charge controller positive output |
+| Current+ (orange) | Wire onward to battery/bus positive |
+| Current− / V− (orange, jumped together) | Negative rail / GND |
+
+### Battery sensor — screw terminal wiring *(pending)*
+
+The battery sensor uses an external shunt on the battery negative rail.
+Thin sense wires (22–24 AWG, twisted pair) run from the board to the shunt.
+
+| Terminal | Connect to |
+|----------|-----------|
+| IN+ | Shunt sense — load side (toward bus bar) |
+| IN− | Shunt sense — battery negative terminal |
+| V+ / VBS | Battery positive (for bus voltage measurement) |
+| GND | Negative rail |
+
+**Shunt placement:** On the battery negative, between the battery terminal and
+the main negative bus bar. Captures all current in/out of the battery.
+
+**Current sign convention:** Positive = charging. If reversed, swap IN+ and IN−
+at the shunt (hardware fix, no code change).
 
 ## I2C Address Map
 
@@ -69,8 +86,8 @@ installation — if the sign is reversed, swap IN+ and IN- at the shunt
 |---------|--------|-------|
 | 0x1E | FXOS8700CQ (accel/mag) | BRKT default; differs from Adafruit 0x1F |
 | 0x20 | FXAS21002C (gyro) | BRKT default; differs from Adafruit 0x21 |
-| 0x40 | INA226 — solar shunt | A0, A1 floating (default) |
-| 0x41 | INA226/INA228 — battery shunt | A0 tied to VS on board; INA228 target when available |
+| 0x40 | INA226 — solar | MJKDZ board, A0/A1 floating (default) |
+| 0x41 | INA226/INA228 — battery | A0 tied to VS; INA228 target when available |
 
 ## Signal K Paths
 
@@ -89,21 +106,21 @@ installation — if the sign is reversed, swap IN+ and IN- at the shunt
 
 ### Power Monitoring
 
+| Path | Description | Source | Status |
+|------|-------------|--------|--------|
+| `electrical.solar.voltage` | Solar voltage (V) | 0x40 | ✓ Working |
+| `electrical.solar.current` | Solar current (A) | 0x40 | ✓ Working |
+| `electrical.solar.power` | Solar power (W) | 0x40 | ✓ Working |
+| `electrical.batteries.house.voltage` | Battery bus voltage (V) | 0x41 | Pending |
+| `electrical.batteries.house.current` | Battery current (A, + = charging) | 0x41 | Pending |
+| `electrical.batteries.house.power` | Battery power (W) | 0x41 | Pending |
+
+When INA228 is fitted at 0x41 (enable `USE_INA228` in firmware):
+
 | Path | Description | Source |
 |------|-------------|--------|
-| `electrical.batteries.house.voltage` | Battery bus voltage (V) | 0x40 |
-| `electrical.batteries.house.current` | Battery current (A, + = charging) | 0x40 |
-| `electrical.batteries.house.power` | Battery power (W) | 0x40 |
-| `electrical.solar.voltage` | Solar voltage (V) | 0x41 |
-| `electrical.solar.current` | Solar current (A) | 0x41 |
-| `electrical.solar.power` | Solar power (W) | 0x41 |
-
-When INA228 is fitted at 0x40 (enable `USE_INA228` in firmware):
-
-| Path | Description | Source |
-|------|-------------|--------|
-| `electrical.batteries.house.energy` | Accumulated energy (J) | 0x40 hardware register |
-| `electrical.batteries.house.capacity` | Accumulated charge (C) | 0x40 hardware register |
+| `electrical.batteries.house.energy` | Accumulated energy (J) | 0x41 hardware register |
+| `electrical.batteries.house.capacity` | Accumulated charge (C) | 0x41 hardware register |
 
 Load current is derived in Signal K by subtraction (battery current − solar
 current) — no third shunt is needed.
@@ -119,27 +136,28 @@ current) — no third shunt is needed.
 
 ## Power Monitoring Configuration
 
-### Shunt resistor
+### Shunt configuration
 
-The shunt value is set in `src/main.cpp`:
+Each sensor position uses a different shunt. The current firmware uses a single
+`INA_SHUNT_OHMS` constant — this will need to be made per-sensor when the
+battery board is installed.
 
+**Solar (current):** MJKDZ onboard R002 shunt = 2mΩ
 ```cpp
-#define INA_SHUNT_OHMS (0.00375f)  // 20A/75mV = 3.75mΩ
-#define INA_MAX_AMPS   (10.0f)     // realistic peak current (not shunt max)
+#define INA_SHUNT_OHMS (0.00200f)  // onboard R002 on MJKDZ INA226 board
 ```
 
-To change shunt specs, update `INA_SHUNT_OHMS`:
+**Battery (pending):** external shunt on negative rail
 
 | Shunt rating | Resistance | `INA_SHUNT_OHMS` |
 |--------------|-----------|-----------------|
 | 50A / 75mV | 1.5mΩ | `0.00150f` |
 | 20A / 75mV | 3.75mΩ | `0.00375f` |
-| 20A / 50mV | 2.5mΩ | `0.00250f` |
 
 ### Upgrading to INA228 (battery position)
 
 The INA228 (Adafruit #5832) is a drop-in hardware replacement for the INA226
-at 0x40. It adds 20-bit resolution and hardware energy/charge accumulation
+at 0x41. It adds 20-bit resolution and hardware energy/charge accumulation
 registers. Wiring is identical.
 
 To enable INA228 support: uncomment one line in `src/main.cpp` and reflash:
@@ -148,8 +166,8 @@ To enable INA228 support: uncomment one line in `src/main.cpp` and reflash:
 #define USE_INA228   // uncomment this line
 ```
 
-On first power-up after fitting INA228, call `resetAccumulators()` to zero
-the energy and charge counters from a known state.
+On first power-up after fitting INA228, see the TODO comment in the
+`#ifdef USE_INA228` block regarding `resetAccumulators()`.
 
 ## Watchdog & Reliability
 
