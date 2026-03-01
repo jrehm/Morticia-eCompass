@@ -58,9 +58,9 @@ at this position. The three screw terminals are:
 
 | Terminal | Connect to |
 |----------|-----------|
-| V+ (green) | Solar charge controller positive output |
+| V+ (orange) | Solar charge controller positive output |
 | Current+ (orange) | Wire onward to battery/bus positive |
-| Current− / V− (orange, jumped together) | Negative rail / GND |
+| Current− / V− (green, jumped together) | Negative rail / GND |
 
 ### Battery sensor — screw terminal wiring *(pending)*
 
