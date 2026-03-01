@@ -91,7 +91,7 @@
 // Current: 20A/75mV shunt = 3.75mΩ
 // To switch shunt specs: update INA_SHUNT_OHMS = mV_rating / (A_rating * 1000)
 //   50A/75mV → 0.00150, 20A/75mV → 0.00375, 20A/50mV → 0.00250
-#define INA_SHUNT_OHMS (0.00375f)
+#define INA_SHUNT_OHMS (0.00150f)
 // Max expected current for LSB calibration (sets resolution — use realistic peak, not shunt max)
 // API: setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS)
 #define INA_MAX_AMPS   (10.0f)
