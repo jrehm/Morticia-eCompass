@@ -43,6 +43,16 @@
 #include "orientation_sensor.h"
 #include "signalk_orientation.h"
 
+// Power monitoring (INA226 / INA228)
+// To transition from INA226 to INA228 at the battery position:
+//   1. Uncomment #define USE_INA228 below
+//   2. Reflash — no wiring changes needed (same address, same shunt)
+// #define USE_INA228
+#include "INA226.h"
+#ifdef USE_INA228
+#include "INA228.h"
+#endif
+
 // ---- Hardware Configuration ----
 // Set via platformio.ini build_flags, with fallback defaults here.
 // BRKT-STBC-AGM01: 0x1E (accel/mag), 0x20 (gyro)
@@ -69,6 +79,22 @@
 #define ATTITUDE_REPORTING_INTERVAL_MS    (200)
 #define CALIBRATION_REPORTING_INTERVAL_MS (4000)
 #define RATE_REPORTING_INTERVAL_MS        (200)
+#define POWER_REPORTING_INTERVAL_MS       (1000)
+
+// Power monitoring I2C addresses
+// Battery: INA228 (target) or INA226 (interim) — no address conflict with BRKT (0x1E/0x20)
+#define INA_BATTERY_I2C_ADDR (0x40)
+// Solar: INA226, A0 pin tied to VS on the board to set 0x41
+#define INA_SOLAR_I2C_ADDR   (0x41)
+
+// Shunt resistor configuration
+// Current: 20A/75mV shunt = 3.75mΩ
+// To switch shunt specs: update INA_SHUNT_OHMS = mV_rating / (A_rating * 1000)
+//   50A/75mV → 0.00150, 20A/75mV → 0.00375, 20A/50mV → 0.00250
+#define INA_SHUNT_OHMS (0.00375f)
+// Max expected current for LSB calibration (sets resolution — use realistic peak, not shunt max)
+// API: setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS)
+#define INA_MAX_AMPS   (10.0f)
 
 // Connectivity watchdog: reboot ESP32 if Signal K connection
 // is lost for this many milliseconds. Handles edge cases where
@@ -325,6 +351,124 @@ void setup() {
   };
   auto* button_consumer = new LambdaConsumer<int>(save_mcal_function);
   button_watcher->connect_to(debounce)->connect_to(button_consumer);
+
+  // ========== POWER MONITORING (INA226/INA228) ==========
+  // Battery sensor at 0x40: INA226 (interim) or INA228 (target, see USE_INA228)
+  // Solar sensor at 0x41: INA226
+  // Both share the existing I2C bus — no additional Wire.begin() needed.
+  //
+  // Current sign convention: verify after installation.
+  // Positive = charging when shunt IN+ faces battery, IN- faces bus bar.
+  // Swap IN+/IN- in hardware (no code change) if sign is reversed.
+
+#ifdef USE_INA228
+  auto* ina_battery = new INA228(INA_BATTERY_I2C_ADDR);
+#else
+  auto* ina_battery = new INA226(INA_BATTERY_I2C_ADDR);
+#endif
+  bool ina_battery_ok = ina_battery->begin();
+  if (!ina_battery_ok) {
+    ESP_LOGE("eCompass", "Battery INA sensor (0x%02X) not found on I2C bus",
+             INA_BATTERY_I2C_ADDR);
+  } else {
+    ina_battery->setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS);
+    ESP_LOGI("eCompass", "Battery INA sensor OK (0x%02X)", INA_BATTERY_I2C_ADDR);
+  }
+
+  auto* ina_solar = new INA226(INA_SOLAR_I2C_ADDR);
+  bool ina_solar_ok = ina_solar->begin();
+  if (!ina_solar_ok) {
+    ESP_LOGE("eCompass", "Solar INA sensor (0x%02X) not found on I2C bus",
+             INA_SOLAR_I2C_ADDR);
+  } else {
+    ina_solar->setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS);
+    ESP_LOGI("eCompass", "Solar INA sensor OK (0x%02X)", INA_SOLAR_I2C_ADDR);
+  }
+
+  // --- Battery: voltage, current, power ---
+  auto bat_voltage = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        return static_cast<float>(ina_battery->getBusVoltage());
+      });
+  bat_voltage->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.voltage", ""));
+
+  auto bat_current = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        return static_cast<float>(ina_battery->getCurrent());
+      });
+  bat_current->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.current", ""));
+
+  auto bat_power = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        return static_cast<float>(ina_battery->getPower());
+      });
+  bat_power->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.power", ""));
+
+#ifdef USE_INA228
+  // INA228 hardware accumulation registers
+  // getEnergy() → Joules (J), getCharge() → Coulombs (C) — both SI units for Signal K
+  //
+  // TODO (first power-up with INA228 fitted): decide on accumulator reset strategy.
+  // The INA228 accumulators reset on every power cycle, so they start from zero
+  // automatically. However, if you want a known reference point (e.g., a full
+  // charge = 0 Ah discharged), add this call before the RepeatSensor setup:
+  //   if (ina_battery_ok) ina_battery->resetAccumulators();
+  // Without this, accumulators reflect only what has happened since last reboot.
+  auto bat_energy = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        return static_cast<float>(ina_battery->getEnergy());  // J
+      });
+  bat_energy->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.energy", ""));
+
+  auto bat_charge = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        return static_cast<float>(ina_battery->getCharge());  // C
+      });
+  bat_charge->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.capacity", ""));
+#endif
+
+  // --- Solar: voltage, current, power ---
+  auto sol_voltage = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_solar, ina_solar_ok]() -> float {
+        if (!ina_solar_ok) return NAN;
+        return static_cast<float>(ina_solar->getBusVoltage());
+      });
+  sol_voltage->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.solar.voltage", ""));
+
+  auto sol_current = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_solar, ina_solar_ok]() -> float {
+        if (!ina_solar_ok) return NAN;
+        return static_cast<float>(ina_solar->getCurrent());
+      });
+  sol_current->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.solar.current", ""));
+
+  auto sol_power = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_solar, ina_solar_ok]() -> float {
+        if (!ina_solar_ok) return NAN;
+        return static_cast<float>(ina_solar->getPower());
+      });
+  sol_power->connect_to(std::make_shared<SKOutput<float>>(
+      "electrical.solar.power", ""));
 
   // Prevent shared_ptr garbage collection
   while (true) {
