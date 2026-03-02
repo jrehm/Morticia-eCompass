@@ -52,15 +52,25 @@ connect to the SH-ESP32 directly inside the enclosure.
 
 ### MJKDZ INA226 solar sensor — screw terminal wiring
 
-The MJKDZ board is a **high-side measurement board** with an onboard 2mΩ shunt
-(R002). Current flows through the board — no external shunt resistor is needed
-at this position. The three screw terminals are:
+The MJKDZ board has an onboard 2mΩ shunt (R002) between the V+ and Current+
+terminals. For production installation, **desolder R002** so that no load
+current flows through the board — V+ and Current+ then become pure sense points.
+Run thin twisted-pair sense wires (22–24 AWG) from those terminals to the
+external shunt. The three screw terminals are:
 
 | Terminal | Connect to |
 |----------|-----------|
-| V+ (orange) | Solar charge controller positive output |
-| Current+ (orange) | Wire onward to battery/bus positive |
+| V+ (orange) | Sense wire — high side of external shunt |
+| Current+ (orange) | Sense wire — low side of external shunt |
 | Current− / V− (green, jumped together) | Negative rail / GND |
+
+**External shunt:** Load current flows through the shunt only — not through
+the board. After desoldering R002, update `INA_SHUNT_OHMS` in firmware to
+match the external shunt (see Power Monitoring Configuration below).
+
+**Bench/interim:** With R002 intact, the board can be used in-line (current
+flowing through the board via V+ → R002 → Current+). This is how it is
+currently wired for bench testing.
 
 ### Battery sensor — screw terminal wiring *(pending)*
 
@@ -138,21 +148,26 @@ current) — no third shunt is needed.
 
 ### Shunt configuration
 
-Each sensor position uses a different shunt. The current firmware uses a single
-`INA_SHUNT_OHMS` constant — this will need to be made per-sensor when the
-battery board is installed.
+Both sensor positions use the same 20A/75mV external shunt (3.75mΩ). Since
+both shunts are identical, a single `INA_SHUNT_OHMS` constant covers both.
 
-**Solar (current):** MJKDZ onboard R002 shunt = 2mΩ
+**Production (external shunts at both positions):**
+```cpp
+#define INA_SHUNT_OHMS (0.00375f)  // 20A/75mV external shunt = 3.75mΩ
+```
+
+**Solar (bench/interim — R002 intact, current through board):**
 ```cpp
 #define INA_SHUNT_OHMS (0.00200f)  // onboard R002 on MJKDZ INA226 board
 ```
 
-**Battery (pending):** external shunt on negative rail
+**Reference — shunt resistance values:**
 
 | Shunt rating | Resistance | `INA_SHUNT_OHMS` |
 |--------------|-----------|-----------------|
+| 20A / 75mV | 3.75mΩ | `0.00375f` ← production |
 | 50A / 75mV | 1.5mΩ | `0.00150f` |
-| 20A / 75mV | 3.75mΩ | `0.00375f` |
+| MJKDZ R002 onboard | 2mΩ | `0.00200f` ← bench only |
 
 ### Upgrading to INA228 (battery position)
 
