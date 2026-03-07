@@ -47,7 +47,7 @@
 // To transition from INA226 to INA228 at the battery position:
 //   1. Uncomment #define USE_INA228 below
 //   2. Reflash — no wiring changes needed (same address, same shunt)
-// #define USE_INA228
+#define USE_INA228
 #include "INA226.h"
 #ifdef USE_INA228
 #include "INA228.h"
@@ -88,19 +88,19 @@
 #define INA_BATTERY_I2C_ADDR (0x41)
 
 // Shunt resistor configuration
-// Current: 20A/75mV shunt = 3.75mΩ
-// To switch shunt specs: update INA_SHUNT_OHMS = mV_rating / (A_rating * 1000)
+// Formula: shunt_ohms = mV_rating / (A_rating * 1000)
 //   50A/75mV → 0.00150, 20A/75mV → 0.00375, 20A/50mV → 0.00250
-#define INA_SHUNT_OHMS (0.00200f)
+#define INA_SOLAR_SHUNT_OHMS   (0.00375f)  // 20A/75mV external shunt
+#define INA_BATTERY_SHUNT_OHMS (0.00375f)  // 20A/75mV external shunt
 // Max expected current for LSB calibration (sets resolution — use realistic peak, not shunt max)
-// API: setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS)
-#define INA_MAX_AMPS   (10.0f)
+// API: setMaxCurrentShunt(INA_MAX_AMPS, INA_x_SHUNT_OHMS)
+#define INA_MAX_AMPS           (10.0f)
 
 // Connectivity watchdog: reboot ESP32 if Signal K connection
 // is lost for this many milliseconds. Handles edge cases where
 // the SKWSClient retry loop gets stuck in a non-disconnected
 // state (e.g., after Signal K server restart).
-#define SK_CONNECTION_TIMEOUT_MS (5 * 60 * 1000)  // 5 minutes
+#define SK_CONNECTION_TIMEOUT_MS (60 * 1000)  // 60 seconds
 
 // Hardware watchdog: reboot if main loop stalls completely.
 // This catches hard lockups (I2C bus hang, stack overflow, etc.)
@@ -132,14 +132,21 @@ void setup() {
   // Build SensESP Application
   SensESPAppBuilder builder;
   sensesp_app = (&builder)
-      ->set_hostname("morticia-ecompass")
+      ->set_hostname("SensESP")
+      //->set_sk_server("halos.local", 3000)  // set via WebUI
       //->set_wifi_client("YourSSID", "YourPassword")
-      //->set_sk_server("10.10.10.1", 3000)
       ->enable_uptime_sensor()
       ->enable_ip_address_sensor()
       ->enable_free_mem_sensor()
       ->enable_system_hz_sensor()
       ->get_app();
+
+  // Override the auto-generated UUID clientId with a human-readable name.
+  // SK source keys appear as ws.<clientId>.* — this keeps them human-readable.
+  // set_client_id() is a local patch to SKWSClient (see DECISIONS.md ADR-005).
+  // reset_auth_token() was used once for initial re-registration; not needed ongoing.
+  sensesp_app->get_ws_client()->set_client_id("SensESP");
+  ESP_LOGI("eCompass", "SK client_id set to: SensESP");
 
   // ========== WATCHDOG SETUP ==========
   // Hardware watchdog: reboots if the main event loop stalls
@@ -353,8 +360,8 @@ void setup() {
   button_watcher->connect_to(debounce)->connect_to(button_consumer);
 
   // ========== POWER MONITORING (INA226/INA228) ==========
-  // Battery sensor at 0x40: INA226 (interim) or INA228 (target, see USE_INA228)
-  // Solar sensor at 0x41: INA226
+  // Battery sensor at 0x41: INA228 (see USE_INA228), external 20A/75mV shunt
+  // Solar sensor at 0x40: INA226, onboard R002 2mΩ shunt (bench config)
   // Both share the existing I2C bus — no additional Wire.begin() needed.
   //
   // Current sign convention: verify after installation.
@@ -371,7 +378,7 @@ void setup() {
     ESP_LOGE("eCompass", "Battery INA sensor (0x%02X) not found on I2C bus",
              INA_BATTERY_I2C_ADDR);
   } else {
-    ina_battery->setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS);
+    ina_battery->setMaxCurrentShunt(INA_MAX_AMPS, INA_BATTERY_SHUNT_OHMS);
     ESP_LOGI("eCompass", "Battery INA sensor OK (0x%02X)", INA_BATTERY_I2C_ADDR);
   }
 
@@ -381,7 +388,7 @@ void setup() {
     ESP_LOGE("eCompass", "Solar INA sensor (0x%02X) not found on I2C bus",
              INA_SOLAR_I2C_ADDR);
   } else {
-    ina_solar->setMaxCurrentShunt(INA_MAX_AMPS, INA_SHUNT_OHMS);
+    ina_solar->setMaxCurrentShunt(INA_MAX_AMPS, INA_SOLAR_SHUNT_OHMS);
     ESP_LOGI("eCompass", "Solar INA sensor OK (0x%02X)", INA_SOLAR_I2C_ADDR);
   }
 
