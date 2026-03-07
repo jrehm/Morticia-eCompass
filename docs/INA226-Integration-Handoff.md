@@ -152,22 +152,18 @@ Two sensors are planned, sharing the same I2C bus on the SH-ESP32:
 
 | Sensor | I2C Address | Measurement Point | Role |
 |--------|-------------|-------------------|------|
-| INA228 (or INA226 interim) | 0x40 | Battery negative bus shunt | Net charge/discharge current, SoC tracking |
+| INA228 (Adafruit #5832) | 0x40 | Battery negative bus shunt | Net charge/discharge current, SoC tracking |
 | INA226 | 0x41 | Solar charge controller negative output | Solar production monitoring |
 
-**INA228 is the target for the battery position** (Adafruit #5832, ~$12–15) due to 20-bit
-resolution and hardware energy/charge accumulation registers (Wh and Ah counters in silicon).
-Adafruit is currently out of stock — INA226 at 0x40 is the interim solution. The transition
-from INA226 → INA228 is a drop-in swap: identical wiring, same default I2C address, library
-change only.
+**INA228 (Adafruit #5832) is the confirmed device for the battery position** — in hand as of March 2026. Selected for 20-bit resolution and hardware energy/charge accumulation registers (Wh and Ah counters in silicon).
 
-**INA226 is sufficient for the solar position** — production monitoring only, no accumulation needed.
+**INA226 is used at the solar position (0x41)** — production monitoring only, no accumulation needed.
 
 ### Compile-Time Sensor Flag
-Use a `#define` to manage the INA226 → INA228 transition without maintaining two codebases:
+The firmware uses `#define USE_INA228` to enable INA228-specific initialization and accumulation register reads:
 
 ```cpp
-#define USE_INA228  // comment out to use INA226 at battery position
+#define USE_INA228  // INA228 at 0x40 (battery) — confirmed hardware
 ```
 
 Use `#ifdef USE_INA228` blocks around differing initialization and read calls. SignalK paths,
@@ -214,7 +210,7 @@ run from the enclosure to the shunt. No desoldering required.
 |---------|--------|-------|
 | 0x1E | FXOS8700CQ accel/mag (9DOF) | Existing |
 | 0x20 | FXAS21002C gyro (9DOF) | Existing |
-| 0x40 | INA228 / INA226 — battery shunt | New |
+| 0x40 | INA228 (Adafruit #5832) — battery shunt | New |
 | 0x41 | INA226 — solar shunt | New |
 
 ### SignalK Paths (confirmed)
@@ -226,18 +222,16 @@ electrical.solar.voltage                (V)   — from 0x41
 electrical.solar.current                (A)   — from 0x41
 electrical.solar.power                  (W)   — from 0x41
 ```
-INA228 additional paths (when fitted):
+INA228 additional paths (hardware accumulation registers):
 ```
 electrical.batteries.house.energy       (Wh)  — from hardware accumulation register
 electrical.batteries.house.capacity     (Ah)  — from hardware charge register
 ```
 
-### Library Recommendations (updated)
-- **Battery sensor (0x40):** Use RobTillaart's library:
-  - INA226: `https://github.com/RobTillaart/INA226`
-  - INA228: `https://github.com/RobTillaart/INA228`
-  - Same author, same coding style — minimizes transition effort
-- **Solar sensor (0x41):** Same INA226 library, second instance at address 0x41
+### Library Recommendations
+- **Battery sensor (0x40, INA228):** `https://github.com/RobTillaart/INA228`
+- **Solar sensor (0x41, INA226):** `https://github.com/RobTillaart/INA226`
+- Same author, same coding style — consistent API between both
 - Verify compatibility with pioarduino / ESP-IDF v5.5.2 / Arduino Core 3.3.7 on first build
 
 ### Eco-Worthy Battery BMS Bluetooth — Deferred
@@ -259,26 +253,25 @@ after adding dependencies — may need to evaluate library size or optimize if s
 ## What Needs to Happen
 
 ### Resolved (decisions made, hardware not yet installed)
-- [x] **Sensor selection:** INA226 at 0x41 (solar), INA228 target / INA226 interim at 0x40 (battery)
-- [x] **Library selection:** RobTillaart INA226 + INA228 (same author, consistent API)
+- [x] **Sensor selection:** INA228 (Adafruit #5832, in hand) at 0x40 (battery); INA226 at 0x41 (solar)
+- [x] **Library selection:** RobTillaart INA228 + INA226 (same author, consistent API)
 - [x] **Shunt spec:** 50A/75mV (1.5mΩ) at both positions
 - [x] **Shunt placement:** Battery negative in waterproof box (Shunt #1), solar controller negative output (Shunt #2)
 - [x] **I2C address map:** confirmed no conflicts with existing 0x1E/0x20 (BRKT)
 - [x] **SignalK paths:** confirmed (see architecture section above)
-- [x] **INA226 → INA228 transition strategy:** compile-time `#define USE_INA228` flag
 
 ### Hardware (pending)
-- [ ] Order INA226 breakout boards x2 and 50A/75mV shunt resistors x2
+- [ ] Order INA226 breakout board x1 and 50A/75mV shunt resistors x2
 - [ ] Set A0 pin to VS on the solar INA226 board to set address 0x41
 - [ ] Wire shunts and sense leads, install in enclosure with SH-ESP32
 - [ ] Twist sense wire pairs before routing
 
 ### Firmware (pending)
-- [ ] Add `#define USE_INA228` flag and `#ifdef` blocks to `main.cpp`
-- [ ] Add RobTillaart INA226 library to `lib_deps` in `platformio.ini`
-- [ ] Initialize both INA sensors (0x40 battery, 0x41 solar) with `setShunt(0.0015, 10.0)`
+- [ ] Add `#define USE_INA228` to `main.cpp`
+- [ ] Add RobTillaart INA228 and INA226 libraries to `lib_deps` in `platformio.ini`
+- [ ] Initialize INA228 at 0x40 and INA226 at 0x41, both with `setShunt(0.0015, 10.0)`
 - [ ] Add `RepeatSensor` + `SKOutput` for voltage, current, power on both sensors
-- [ ] Add INA228 energy/charge accumulation reads under `#ifdef USE_INA228`
+- [ ] Add INA228 energy/charge accumulation reads (Wh, Ah)
 - [ ] Verify I2C bus sharing at 100kHz with all four devices (0x1E, 0x20, 0x40, 0x41)
 - [ ] Monitor flash usage after adding libraries — currently at 85.6%, headroom is tight
 - [ ] Test and verify all SignalK paths visible in data browser
