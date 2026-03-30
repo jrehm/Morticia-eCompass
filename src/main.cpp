@@ -139,6 +139,7 @@ void setup() {
       ->enable_ip_address_sensor()
       ->enable_free_mem_sensor()
       ->enable_system_hz_sensor()
+      ->enable_ota("morticia")
       ->get_app();
 
   // Override the auto-generated UUID clientId with a human-readable name.
@@ -358,6 +359,19 @@ void setup() {
   };
   auto* button_consumer = new LambdaConsumer<int>(save_mcal_function);
   button_watcher->connect_to(debounce)->connect_to(button_consumer);
+
+  // HTTP endpoint to save magnetic calibration from any browser on the network.
+  // Usage: POST http://sensesp.local/api/calibration/save-mag
+  auto save_cal_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_POST, "/api/calibration/save-mag",
+      [orientation_sensor](httpd_req_t* req) {
+        orientation_sensor->sensor_interface_->SaveMagneticCalibration();
+        ESP_LOGI("eCompass", "Magnetic Calibration saved to NVS (via HTTP)");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Magnetic calibration saved", 0);
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(save_cal_handler);
 
   // ========== POWER MONITORING (INA226/INA228) ==========
   // Battery sensor at 0x41: INA228 (see USE_INA228), external 20A/75mV shunt
