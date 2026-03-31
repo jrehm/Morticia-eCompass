@@ -12,11 +12,13 @@ trimaran "Morticia", reporting to Signal K via WiFi.
 - BRKT-STBC-AGM01 (NXP FXOS8700CQ accel/mag + FXAS21002C gyro)
 
 **Power monitoring**
-- MJKDZ INA226 @ 0x40 — solar charge controller *(installed)*
-- INA226/INA228 @ 0x41 — house battery *(pending installation)*
+- MJKDZ INA226 @ 0x40 — solar charge controller
+- INA228 (Adafruit #5832) @ 0x41 — house battery
 
 **Network**
-- OpenPlotter Raspberry Pi 4 running Signal K at 192.168.8.212:3000
+- Primary: HALPI2 running Signal K at `halos.local:3000` (192.168.8.211)
+- Backup: OpenPlotter Raspberry Pi 4 at `openplotter.local:3000` (192.168.8.212)
+- ESP32 web UI: `http://sensesp.local` (192.168.8.214)
 
 ## Wiring
 
@@ -34,13 +36,13 @@ trimaran "Morticia", reporting to Signal K via WiFi.
 
 **Note:** SH-ESP32 has 2kΩ pull-ups on I2C. Do not add external pull-ups.
 
-### INA226 (power sensors) → SH-ESP32
+### INA226/INA228 (power sensors) → SH-ESP32
 
-Both INA226 boards share the same I2C bus. I2C header pins (SDA, SCL, VCC, GND)
+Both sensors share the same I2C bus. I2C header pins (SDA, SCL, VCC, GND)
 connect to the SH-ESP32 directly inside the enclosure.
 
-| INA226 Pin | Signal | SH-ESP32 |
-|------------|--------|----------|
+| Pin | Signal | SH-ESP32 |
+|-----|--------|----------|
 | VCC | Power | 3.3V |
 | GND | Ground | GND |
 | SDA | I2C Data | SDA (GPIO 16) |
@@ -48,15 +50,12 @@ connect to the SH-ESP32 directly inside the enclosure.
 
 **Address configuration:**
 - Solar INA226 (0x40): A0 and A1 floating (default)
-- Battery INA226/INA228 (0x41): A0 pin tied to VS (VCC); A1 floating
+- Battery INA228 (0x41): A0 pin tied to VS (VCC); A1 floating
 
 ### MJKDZ INA226 solar sensor — screw terminal wiring
 
-The MJKDZ board has an onboard 2mΩ shunt (R002) between the V+ and Current+
-terminals. For production installation, **desolder R002** so that no load
-current flows through the board — V+ and Current+ then become pure sense points.
-Run thin twisted-pair sense wires (22–24 AWG) from those terminals to the
-external shunt. The three screw terminals are:
+Onboard shunt R002 has been desoldered. V+ and Current+ are pure sense points
+connected via twisted-pair sense wires (22–24 AWG) to the external 20A/75mV shunt.
 
 | Terminal | Connect to |
 |----------|-----------|
@@ -64,18 +63,11 @@ external shunt. The three screw terminals are:
 | Current+ (orange) | Sense wire — low side of external shunt |
 | Current− / V− (green, jumped together) | Negative rail / GND |
 
-**External shunt:** Load current flows through the shunt only — not through
-the board. After desoldering R002, update `INA_SHUNT_OHMS` in firmware to
-match the external shunt (see Power Monitoring Configuration below).
+### Battery INA228 — screw terminal wiring
 
-**Bench/interim:** With R002 intact, the board can be used in-line (current
-flowing through the board via V+ → R002 → Current+). This is how it is
-currently wired for bench testing.
-
-### Battery sensor — screw terminal wiring *(pending)*
-
-The battery sensor uses an external shunt on the battery negative rail.
-Thin sense wires (22–24 AWG, twisted pair) run from the board to the shunt.
+Onboard shunt resistor has been desoldered. The battery sensor uses an external
+20A/75mV shunt on the battery negative rail. Thin sense wires (22–24 AWG,
+twisted pair) run from the board to the shunt.
 
 | Terminal | Connect to |
 |----------|-----------|
@@ -97,7 +89,7 @@ at the shunt (hardware fix, no code change).
 | 0x1E | FXOS8700CQ (accel/mag) | BRKT default; differs from Adafruit 0x1F |
 | 0x20 | FXAS21002C (gyro) | BRKT default; differs from Adafruit 0x21 |
 | 0x40 | INA226 — solar | MJKDZ board, A0/A1 floating (default) |
-| 0x41 | INA226/INA228 — battery | A0 tied to VS; INA228 target when available |
+| 0x41 | INA228 — battery | Adafruit #5832, A0 tied to VS |
 
 ## Signal K Paths
 
@@ -116,92 +108,100 @@ at the shunt (hardware fix, no code change).
 
 ### Power Monitoring
 
-| Path | Description | Source | Status |
-|------|-------------|--------|--------|
-| `electrical.solar.voltage` | Solar voltage (V) | 0x40 | ✓ Working |
-| `electrical.solar.current` | Solar current (A) | 0x40 | ✓ Working |
-| `electrical.solar.power` | Solar power (W) | 0x40 | ✓ Working |
-| `electrical.batteries.house.voltage` | Battery bus voltage (V) | 0x41 | Pending |
-| `electrical.batteries.house.current` | Battery current (A, + = charging) | 0x41 | Pending |
-| `electrical.batteries.house.power` | Battery power (W) | 0x41 | Pending |
-
-When INA228 is fitted at 0x41 (enable `USE_INA228` in firmware):
-
 | Path | Description | Source |
 |------|-------------|--------|
-| `electrical.batteries.house.energy` | Accumulated energy (J) | 0x41 hardware register |
-| `electrical.batteries.house.capacity` | Accumulated charge (C) | 0x41 hardware register |
+| `electrical.solar.voltage` | Solar voltage (V) | INA226 @ 0x40 |
+| `electrical.solar.current` | Solar current (A) | INA226 @ 0x40 |
+| `electrical.solar.power` | Solar power (W) | INA226 @ 0x40 |
+| `electrical.batteries.house.voltage` | Battery bus voltage (V) | INA228 @ 0x41 |
+| `electrical.batteries.house.current` | Battery current (A, + = charging) | INA228 @ 0x41 |
+| `electrical.batteries.house.power` | Battery power (W) | INA228 @ 0x41 |
+| `electrical.batteries.house.energy` | Accumulated energy (J) | INA228 hardware register |
+| `electrical.batteries.house.capacity` | Accumulated charge (C) | INA228 hardware register |
 
 Load current is derived in Signal K by subtraction (battery current − solar
 current) — no third shunt is needed.
 
 ## Setup
 
-1. Install VS Code + PlatformIO (pioarduino)
-2. Open this project folder
-3. Build and upload: PlatformIO > shesp32 > Upload and Monitor
-4. Connect to the `morticia-ecompass` WiFi AP (password: `thisisfine`)
-5. Configure WiFi and Signal K server via the web interface
-6. Perform magnetic calibration by rotating sensor through all axes
+### Prerequisites
+
+- [VS Code](https://code.visualstudio.com/) with [PlatformIO](https://platformio.org/) extension (pioarduino platform)
+
+### First-time setup
+
+1. Open this project folder in VS Code
+2. Build and upload via USB: **PlatformIO > shesp32 > Upload and Monitor**
+3. Connect to the `SensESP` WiFi AP (password: `thisisfine`)
+4. Configure WiFi credentials and Signal K server via the web interface at `http://192.168.4.1`
+5. After WiFi connects, the web interface moves to `http://sensesp.local`
+
+### OTA firmware updates
+
+ArduinoOTA is enabled with password `morticia`. After the initial USB flash,
+all subsequent updates can be done over WiFi:
+
+```bash
+pio run -t upload --upload-port 192.168.8.214
+```
+
+The auth password is configured in `platformio.ini` via `upload_flags`.
+
+### Magnetic calibration
+
+After power-on, rotate the sensor through various orientations for 15–30 seconds.
+Monitor `orientation.calibration.magfit` — values below 3.5% indicate good
+calibration.
+
+**Save calibration** (persists to NVS across reboots):
+- Boat admin panel (preferred): use the compass calibration button at `halos.local/boat-panel`
+- HTTP endpoint: `curl -X POST http://sensesp.local/api/calibration/save-mag`
+- Physical fallback: press the BOOT button (GPIO 0) on the SH-ESP32
 
 ## Power Monitoring Configuration
 
 ### Shunt configuration
 
-Both sensor positions use the same 20A/75mV external shunt (3.75mΩ). Since
-both shunts are identical, a single `INA_SHUNT_OHMS` constant covers both.
-
-**Production (external shunts at both positions):**
-```cpp
-#define INA_SHUNT_OHMS (0.00375f)  // 20A/75mV external shunt = 3.75mΩ
-```
-
-**Solar (bench/interim — R002 intact, current through board):**
-```cpp
-#define INA_SHUNT_OHMS (0.00200f)  // onboard R002 on MJKDZ INA226 board
-```
-
-**Reference — shunt resistance values:**
-
-| Shunt rating | Resistance | `INA_SHUNT_OHMS` |
-|--------------|-----------|-----------------|
-| 20A / 75mV | 3.75mΩ | `0.00375f` ← production |
-| 50A / 75mV | 1.5mΩ | `0.00150f` |
-| MJKDZ R002 onboard | 2mΩ | `0.00200f` ← bench only |
-
-### Upgrading to INA228 (battery position)
-
-The INA228 (Adafruit #5832) is a drop-in hardware replacement for the INA226
-at 0x41. It adds 20-bit resolution and hardware energy/charge accumulation
-registers. Wiring is identical.
-
-To enable INA228 support: uncomment one line in `src/main.cpp` and reflash:
+Both positions use identical 20A/75mV external shunts (3.75mΩ). Onboard shunt
+resistors have been desoldered from both sensor PCBs.
 
 ```cpp
-#define USE_INA228   // uncomment this line
+#define INA_SOLAR_SHUNT_OHMS   (0.00375f)  // 20A/75mV external shunt
+#define INA_BATTERY_SHUNT_OHMS (0.00375f)  // 20A/75mV external shunt
 ```
 
-On first power-up after fitting INA228, see the TODO comment in the
-`#ifdef USE_INA228` block regarding `resetAccumulators()`.
+These can be adjusted independently in `src/main.cpp` if a shunt is replaced.
+
+### INA228 battery sensor
+
+The INA228 is enabled via `#define USE_INA228` in `src/main.cpp`. It provides
+20-bit ADC resolution and hardware energy/charge accumulation registers not
+available on the INA226.
+
+To revert to INA226 at the battery position, comment out `#define USE_INA228`.
 
 ## Watchdog & Reliability
 
 - **Hardware watchdog (120s):** Reboots if the main event loop stalls
   (I2C bus hang, stack overflow, etc.). Fed every 15 seconds from the event loop.
-- **Connectivity watchdog (5 min):** Monitors the Signal K WebSocket
-  connection. Reboots if disconnected longer than 5 minutes — handles the
+- **Connectivity watchdog (60s):** Monitors the Signal K WebSocket
+  connection. Reboots if disconnected longer than 60 seconds — handles the
   edge case where `esp_websocket_client` fails to fire a disconnect callback
   after a Signal K server restart.
 
 Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
 `SK_CONNECTION_TIMEOUT_MS` in `src/main.cpp`.
 
-## Magnetic Calibration
+## Local SensESP Patches
 
-After power-on, rotate the sensor through various orientations for 15–30 seconds.
-Monitor `orientation.calibration.magfit` — values below 3.5% indicate good
-calibration. Save calibration via the SH-ESP32 boot button (GPIO0) or the
-SensESP web interface.
+This project patches two methods into the local SensESP library copy
+(`.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`). These are lost on
+`pio run --target clean` or library upgrade and must be reapplied:
+
+- `set_client_id()` / `reset_auth_token()` on `SKWSClient` — human-readable
+  Signal K source naming (see [ADR-005](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md))
+- `get_http_server()` on `SensESPApp` — exposes HTTP server for custom
+  endpoints like the calibration save handler (see [ADR-007](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md))
 
 ## Credits
 
