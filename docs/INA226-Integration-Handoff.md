@@ -1,5 +1,14 @@
 # Morticia eCompass — INA226 Integration Handoff
 
+> **ARCHIVED PLANNING DOCUMENT** — The INA226/INA228 integration described here
+> is complete as of April 2026. The firmware is deployed on the boat. See `README.md`
+> for current hardware state and `CHANGELOG.md` for version history. This document
+> is preserved for design rationale and decision history.
+>
+> **Address correction:** The final implementation swapped addresses from the plan
+> below — INA226 solar landed at **0x40** (A0/A1 floating) and INA228 battery
+> landed at **0x41** (A0 tied to VS). See the I2C Address Map in README.md.
+
 ## Purpose
 This document provides everything needed to continue development on the
 Morticia-eCompass project, specifically adding an INA226 current/voltage/power
