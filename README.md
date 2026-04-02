@@ -194,16 +194,56 @@ Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
 
 ## Local SensESP Patches
 
-This project patches two methods into the local SensESP library copy
-(`.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`). These are lost on
-`pio run --target clean` or library upgrade and must be reapplied:
+This project patches two methods into the local SensESP library copy.
+These are lost on `pio run --target clean` or any library upgrade and
+**must be reapplied manually** before the project will compile.
 
-- `set_client_id()` / `reset_auth_token()` on `SKWSClient` — human-readable
-  Signal K source naming (see [ADR-005](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md))
-- `get_http_server()` on `SensESPApp` — exposes HTTP server for custom
-  endpoints like the calibration save handler (see [ADR-007](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md))
+**File: `.pio/libdeps/shesp32/SensESP/src/sensesp/signalk/signalk_ws_client.h`**
+Add before the `protected:` section:
+```cpp
+// LOCAL PATCH — set human-readable Signal K client ID (ADR-005).
+void set_client_id(const String& client_id) { client_id_ = client_id; }
+```
+
+**File: `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`**
+Add with the other public getters (after `get_ws_client()`):
+```cpp
+// LOCAL PATCH — expose HTTP server for custom endpoints (ADR-007).
+std::shared_ptr<HTTPServer> get_http_server() { return this->http_server_; }
+```
+
+See [ADR-005](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md) and [ADR-007](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md) for rationale.
+
+## Known Upgrade Issues
+
+Issues encountered during the v1.0.0 dependency upgrade (April 2026) that
+may recur on future upgrades:
+
+**1. OrientationSensorFusion-ESP: FIFO size constants undefined**
+
+Symptom: compile errors `'ACCEL_FIFO_SIZE' undeclared` in `sensor_fusion.h`.
+
+Cause: header include order bug in `OrientationSensorFusion-ESP` HEAD — the
+`SENSOR_FXAX2100x_AND_FXOS8700` define from `board.h` arrives too late for
+`driver_sensors.h` to see it.
+
+Fix: already applied — `-D SENSOR_FXAX2100x_AND_FXOS8700` in `platformio.ini`
+`build_flags` makes the hardware selection explicit and sidesteps the bug.
+
+**2. SignalK-Orientation v1.0.1: `OrientationSensor` constructor changed**
+
+Symptom: `no matching function for call to 'OrientationSensor::OrientationSensor(int, int, int, int)'`.
+
+Cause: v1.0.1 added STM sensor support and split the 4-arg constructor into
+6 args: `(sda, scl, accel_addr, mag_addr, gyro_addr, therm_addr)`.
+
+Fix: already applied in `main.cpp` — for FXOS8700CQ, accel/mag/therm are all
+the same chip at 0x1E, so `BOARD_ACCEL_MAG_I2C_ADDR` is passed for all three.
 
 ## Credits
+
+Runs on the [SH-ESP32](https://github.com/hatlabs/SH-ESP32) (Hat Labs Sailor Hat for ESP32).
+Documentation: [docs.hatlabs.fi/sh-esp32](https://docs.hatlabs.fi/sh-esp32/)
 
 Built on [SignalK-Orientation](https://github.com/BjarneBitscrambler/SignalK-Orientation)
 by Bjarne Hansen, using the [SensESP](https://github.com/SignalK/SensESP) framework.

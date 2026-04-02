@@ -128,6 +128,7 @@ void setup() {
   pinMode(2, OUTPUT);
   pinMode(4, OUTPUT);
   SetupLogging(ESP_LOG_INFO);
+  ESP_LOGI(TAG, "Morticia eCompass v%s starting", FIRMWARE_VERSION);
 
   // Build SensESP Application
   SensESPAppBuilder builder;
@@ -206,8 +207,15 @@ void setup() {
   const char* kConfigPathNone = "";
 
   // ---- Initialize Orientation Sensor ----
+  // SignalK-Orientation v1.0.1 changed constructor to 6 args (added separate
+  // mag_i2c_addr and therm_i2c_addr for STM sensor support). For FXOS8700CQ,
+  // accel, mag, and therm are all on the same IC at the same address.
   auto* orientation_sensor = new OrientationSensor(
-      PIN_I2C_SDA, PIN_I2C_SCL, BOARD_ACCEL_MAG_I2C_ADDR, BOARD_GYRO_I2C_ADDR);
+      PIN_I2C_SDA, PIN_I2C_SCL,
+      BOARD_ACCEL_MAG_I2C_ADDR,   // accel (FXOS8700CQ)
+      BOARD_ACCEL_MAG_I2C_ADDR,   // mag   (FXOS8700CQ — same chip)
+      BOARD_GYRO_I2C_ADDR,        // gyro  (FXAS21002C)
+      BOARD_ACCEL_MAG_I2C_ADDR);  // therm (FXOS8700CQ — same chip)
   const int fusionIntervalMs = 1000 / orientation_sensor->GetFusionRateHz();
   event_loop()->onRepeat(fusionIntervalMs,
       [orientation_sensor]() { orientation_sensor->ReadAndProcessSensors(); });
