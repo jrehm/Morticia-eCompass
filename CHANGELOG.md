@@ -15,6 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped SensESP dependency floor from `^3.2.2` to `^3.3.0` (released 2026-04-11)
+
+### Why this matters
+- **Memory safety**: CurveInterpolator memory leak fixed (we use it for the deviation table);
+  use-after-free in WebSocket restart path fixed
+- **Reliability**: `DigitalInputChange` data race fixed (used for mag cal save button);
+  WebSocket reconnect now uses exponential backoff (reduces unnecessary reboots from our
+  connectivity watchdog)
+- **Security**: Admin password now stored as HA1 hash; CSRF protection on destructive HTTP
+  endpoints (including our `/api/calibration/save-mag`)
+
+### Build note
+After `pio run` pulls 3.3.0, the two local SensESP patches must be reapplied before the
+project will compile. See README § "Local SensESP Patches" for the exact lines to add to:
+- `.pio/libdeps/shesp32/SensESP/src/sensesp/signalk/signalk_ws_client.h`
+- `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`
+
 ---
 
 ## [1.0.0] - 2026-04-02
