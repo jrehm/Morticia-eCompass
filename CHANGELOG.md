@@ -15,8 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.0.1] - 2026-04-23
+
 ### Changed
 - Bumped SensESP dependency floor from `^3.2.2` to `^3.3.0` (released 2026-04-11)
+- `FIRMWARE_VERSION` → `1.0.1`
 
 ### Why this matters
 - **Memory safety**: CurveInterpolator memory leak fixed (we use it for the deviation table);
@@ -91,5 +96,6 @@ Initial production release. Firmware deployed on Morticia's SH-ESP32 at
   power cycle. Consider `resetAccumulators()` call on confirmed full charge.
 - BMS Bluetooth integration deferred (Eco-Worthy proprietary protocol).
 
-[Unreleased]: https://github.com/jrehm/Morticia-eCompass/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/jrehm/Morticia-eCompass/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/jrehm/Morticia-eCompass/releases/tag/v1.0.1
 [1.0.0]: https://github.com/jrehm/Morticia-eCompass/releases/tag/v1.0.0
