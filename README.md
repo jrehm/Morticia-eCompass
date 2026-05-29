@@ -116,8 +116,9 @@ at the shunt (hardware fix, no code change).
 | `electrical.batteries.house.voltage` | Battery bus voltage (V) | INA228 @ 0x41 |
 | `electrical.batteries.house.current` | Battery current (A, + = charging) | INA228 @ 0x41 |
 | `electrical.batteries.house.power` | Battery power (W) | INA228 @ 0x41 |
-| `electrical.batteries.house.energy` | Accumulated energy (J) | INA228 hardware register |
-| `electrical.batteries.house.capacity` | Accumulated charge (C) | INA228 hardware register |
+| `electrical.batteries.house.energy` | Remaining energy (Wh) | INA228 hardware register |
+| `electrical.batteries.house.capacity.remaining` | Remaining charge (Ah) | INA228 hardware register |
+| `electrical.batteries.house.capacity.stateOfCharge` | State of charge (0–1 ratio) | INA228 hardware register |
 
 Load current is derived in Signal K by subtraction (battery current − solar
 current) — no third shunt is needed.
@@ -172,13 +173,25 @@ resistors have been desoldered from both sensor PCBs.
 
 These can be adjusted independently in `src/main.cpp` if a shunt is replaced.
 
-### INA228 battery sensor
+### Battery state of charge
 
-The INA228 is enabled via `#define USE_INA228` in `src/main.cpp`. It provides
-20-bit ADC resolution and hardware energy/charge accumulation registers not
-available on the INA226.
+The INA228's hardware charge and energy accumulation registers track Coulombs
+and Joules in/out since the last "set full" event. The firmware converts these
+to operator-friendly values using the pack's nominal capacity:
 
-To revert to INA226 at the battery position, comment out `#define USE_INA228`.
+```cpp
+#define INA_BATTERY_NOMINAL_AH  (100.0f)   // Eco-Worthy 100Ah pack
+#define INA_BATTERY_NOMINAL_V   (12.8f)    // nominal LiFePO4 voltage
+```
+
+**Set full** (call after a confirmed full charge):
+- Boat admin panel: use the **Set Battery Full** button at `halos.local/boat-panel`
+- HTTP endpoint: `curl -X POST http://sensesp.local/api/battery/set-full`
+
+**Sign convention:** discharge produces a *negative* accumulator value, so
+`remaining_Ah` decreases during discharge. If `capacity.remaining` increases
+during discharge, swap the INA228 shunt sense wires (IN+/IN−) — hardware fix,
+no code change needed.
 
 ## Watchdog & Reliability
 
@@ -194,25 +207,20 @@ Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
 
 ## Local SensESP Patches
 
-This project patches two methods into the local SensESP library copy.
-These are lost on `pio run --target clean` or any library upgrade and
+This project requires one patch to the local SensESP library copy.
+It is lost on `pio run --target clean` or any library upgrade and
 **must be reapplied manually** before the project will compile.
 
-**File: `.pio/libdeps/shesp32/SensESP/src/sensesp/signalk/signalk_ws_client.h`**
-Add before the `protected:` section:
-```cpp
-// LOCAL PATCH — set human-readable Signal K client ID (ADR-005).
-void set_client_id(const String& client_id) { client_id_ = client_id; }
-```
-
 **File: `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`**
-Add with the other public getters (after `get_ws_client()`):
+Add with the other public getters (after `get_sk_delta()`):
 ```cpp
-// LOCAL PATCH — expose HTTP server for custom endpoints (ADR-007).
+// LOCAL PATCH — expose HTTP server for custom endpoints.
 std::shared_ptr<HTTPServer> get_http_server() { return this->http_server_; }
 ```
 
-See [ADR-005](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md) and [ADR-007](https://github.com/jrehm/morticia-project/blob/main/DECISIONS.md) for rationale.
+SensESP 3.3.x made `http_server_` protected with no public accessor. This
+one-line patch restores access so `/api/battery/set-full` and
+`/api/calibration/save-mag` can be registered on the primary HTTP server.
 
 ## Known Upgrade Issues
 
