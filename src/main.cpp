@@ -39,6 +39,10 @@
 // For temperature calibration
 #include "sensesp/transforms/linear.h"
 
+// Custom API endpoints — registered on SensESP's primary HTTP server (port 80)
+// via a local patch that adds get_http_server() to SensESPApp (see DECISIONS.md).
+#include "sensesp/net/http_server.h"
+
 // Orientation sensor library
 #include "orientation_sensor.h"
 #include "signalk_orientation.h"
@@ -143,12 +147,8 @@ void setup() {
       ->enable_ota("morticia")
       ->get_app();
 
-  // Override the auto-generated UUID clientId with a human-readable name.
-  // SK source keys appear as ws.<clientId>.* — this keeps them human-readable.
-  // set_client_id() is a local patch to SKWSClient (see DECISIONS.md ADR-005).
-  // reset_auth_token() was used once for initial re-registration; not needed ongoing.
-  sensesp_app->get_ws_client()->set_client_id("SensESP");
-  ESP_LOGI("eCompass", "SK client_id set to: SensESP");
+  // Note: set_client_id() was a local SensESP patch removed in 3.3.1+.
+  // SK source key is now derived from the hostname set in SensESPAppBuilder.
 
   // ========== WATCHDOG SETUP ==========
   // Hardware watchdog: reboots if the main event loop stalls
@@ -368,8 +368,8 @@ void setup() {
   auto* button_consumer = new LambdaConsumer<int>(save_mcal_function);
   button_watcher->connect_to(debounce)->connect_to(button_consumer);
 
-  // HTTP endpoint to save magnetic calibration from any browser on the network.
-  // Usage: POST http://sensesp.local/api/calibration/save-mag
+  // HTTP endpoint: save magnetic calibration.
+  // Usage (from boat-panel): POST http://sensesp.local/api/calibration/save-mag
   auto save_cal_handler = std::make_shared<HTTPRequestHandler>(
       1 << HTTP_POST, "/api/calibration/save-mag",
       [orientation_sensor](httpd_req_t* req) {
@@ -474,6 +474,27 @@ void setup() {
   auto bat_charge_out = std::make_shared<SKOutput<float>>(
       "electrical.batteries.house.capacity", "");
   bat_charge->connect_to(bat_charge_out);
+
+  // HTTP endpoint: reset INA228 accumulators — marks current state as "battery full".
+  // Resets charge (C) and energy (J) counters to zero; values then represent
+  // Coulombs/Joules discharged since this reference point.
+  // Usage (from boat-panel): POST http://sensesp.local:8081/api/battery/set-full
+  auto set_full_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_POST, "/api/battery/set-full",
+      [ina_battery, ina_battery_ok](httpd_req_t* req) {
+        if (!ina_battery_ok) {
+          httpd_resp_set_status(req, "503 Service Unavailable");
+          httpd_resp_set_type(req, "text/plain");
+          httpd_resp_send(req, "Battery sensor not available", 0);
+          return ESP_OK;
+        }
+        ina_battery->setAccumulation(0);  // resets both charge and energy registers
+        ESP_LOGI("eCompass", "Battery accumulators reset — full charge reference set");
+        httpd_resp_set_type(req, "text/plain");
+        httpd_resp_send(req, "Battery full reference set — accumulators reset", 0);
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(set_full_handler);
 #endif
 
   // --- Solar: voltage, current, power ---

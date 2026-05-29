@@ -17,6 +17,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.0] - 2026-05-29
+
+### Added
+- INA228 power monitoring: voltage, current, power, charge (C), energy (J) published
+  to `electrical.batteries.house.*` and `electrical.solar.*` Signal K paths
+- `/api/battery/set-full` HTTP endpoint — resets INA228 charge and energy accumulators
+  to zero, establishing a full-charge reference point for Ah/Wh tracking
+- `/api/calibration/save-mag` HTTP endpoint restored — was removed when SensESP 3.3.1
+  dropped `get_http_server()`; restored via local patch (see Local Patches below)
+
+### Changed
+- SensESP updated to 3.3.1-alpha (pulled as transitive dep alongside 3.3.0)
+- Removed `set_client_id()` call — that local patch is no longer needed; SK source
+  key is now derived from the hostname
+- Removed `UIButton` approach for web actions — Control tab not yet implemented
+  in SensESP 3.3.x frontend; HTTP endpoints are used instead
+- `FIRMWARE_VERSION` → `1.1.0`
+
+### Local Patches (applied to `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`)
+- Added `get_http_server()` public accessor — SensESP 3.3.x made `http_server_`
+  protected with no public getter; this one-line patch restores access for
+  registering custom HTTP handlers. Re-apply after `pio pkg update`.
+
+---
+
 ## [1.0.1] - 2026-04-23
 
 ### Changed
