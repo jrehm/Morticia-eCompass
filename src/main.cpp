@@ -100,6 +100,16 @@
 // API: setMaxCurrentShunt(INA_MAX_AMPS, INA_x_SHUNT_OHMS)
 #define INA_MAX_AMPS           (10.0f)
 
+// Battery pack specifications — used for remaining capacity and SoC calculations.
+// Update if the battery is replaced with a different pack.
+// Eco-Worthy 12.8V 100Ah LiFePO4 (4S, nominal 12.8V)
+#define INA_BATTERY_NOMINAL_AH   (100.0f)   // nameplate capacity
+#define INA_BATTERY_NOMINAL_V    (12.8f)    // nominal voltage for Wh calculation
+#define INA_BATTERY_NOMINAL_WH   (INA_BATTERY_NOMINAL_AH * INA_BATTERY_NOMINAL_V)
+// Sign convention: discharge is NEGATIVE accumulator direction.
+// If remaining values increase during discharge, swap shunt sense wires (IN+/IN-)
+// or negate the getCharge()/getEnergy() calls below.
+
 // Connectivity watchdog: reboot ESP32 if Signal K connection
 // is lost for this many milliseconds. Handles edge cases where
 // the SKWSClient retry loop gets stuck in a non-disconnected
@@ -446,34 +456,62 @@ void setup() {
   bat_power->connect_to(bat_power_out);
 
 #ifdef USE_INA228
-  // INA228 hardware accumulation registers
-  // getEnergy() → Joules (J), getCharge() → Coulombs (C) — both SI units for Signal K
+  // INA228 hardware accumulation registers — converted to remaining Ah/Wh/SoC.
+  // After "set full", accumulators start at zero and go negative as the battery
+  // discharges (assuming correct shunt orientation — see sign convention note above).
   //
-  // TODO (first power-up with INA228 fitted): decide on accumulator reset strategy.
-  // The INA228 accumulators reset on every power cycle, so they start from zero
-  // automatically. However, if you want a known reference point (e.g., a full
-  // charge = 0 Ah discharged), add this call before the RepeatSensor setup:
-  //   if (ina_battery_ok) ina_battery->resetAccumulators();
-  // Without this, accumulators reflect only what has happened since last reboot.
-  auto bat_energy = std::make_shared<RepeatSensor<float>>(
-      POWER_REPORTING_INTERVAL_MS,
-      [ina_battery, ina_battery_ok]() -> float {
-        if (!ina_battery_ok) return NAN;
-        return static_cast<float>(ina_battery->getEnergy());  // J
-      });
-  auto bat_energy_out = std::make_shared<SKOutput<float>>(
-      "electrical.batteries.house.energy", "");
-  bat_energy->connect_to(bat_energy_out);
+  // remaining_Ah = nominal_Ah + accumulated_C / 3600
+  // remaining_Wh = nominal_Wh + accumulated_J / 3600
+  // SoC          = remaining_Ah / nominal_Ah  (clamped 0–1)
 
-  auto bat_charge = std::make_shared<RepeatSensor<float>>(
+  // remaining Ah → electrical.batteries.house.capacity.remaining
+  auto bat_remaining_ah = std::make_shared<RepeatSensor<float>>(
       POWER_REPORTING_INTERVAL_MS,
       [ina_battery, ina_battery_ok]() -> float {
         if (!ina_battery_ok) return NAN;
-        return static_cast<float>(ina_battery->getCharge());  // C
+        float accumulated_ah = static_cast<float>(ina_battery->getCharge()) / 3600.0f;
+        return INA_BATTERY_NOMINAL_AH + accumulated_ah;
       });
-  auto bat_charge_out = std::make_shared<SKOutput<float>>(
-      "electrical.batteries.house.capacity", "");
-  bat_charge->connect_to(bat_charge_out);
+  auto bat_remaining_ah_meta = std::make_shared<SKMetadata>();
+  bat_remaining_ah_meta->units_ = "Ah";
+  bat_remaining_ah_meta->display_name_ = "Remaining Charge";
+  bat_remaining_ah_meta->short_name_ = "Remaining Ah";
+  auto bat_remaining_ah_out = std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.capacity.remaining", "", bat_remaining_ah_meta);
+  bat_remaining_ah->connect_to(bat_remaining_ah_out);
+
+  // remaining Wh → electrical.batteries.house.energy
+  auto bat_remaining_wh = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        float accumulated_wh = static_cast<float>(ina_battery->getEnergy()) / 3600.0f;
+        return INA_BATTERY_NOMINAL_WH + accumulated_wh;
+      });
+  auto bat_remaining_wh_meta = std::make_shared<SKMetadata>();
+  bat_remaining_wh_meta->units_ = "Wh";
+  bat_remaining_wh_meta->display_name_ = "Remaining Energy";
+  bat_remaining_wh_meta->short_name_ = "Remaining Wh";
+  auto bat_remaining_wh_out = std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.energy", "", bat_remaining_wh_meta);
+  bat_remaining_wh->connect_to(bat_remaining_wh_out);
+
+  // SoC ratio (0–1) → electrical.batteries.house.capacity.stateOfCharge
+  auto bat_soc = std::make_shared<RepeatSensor<float>>(
+      POWER_REPORTING_INTERVAL_MS,
+      [ina_battery, ina_battery_ok]() -> float {
+        if (!ina_battery_ok) return NAN;
+        float accumulated_ah = static_cast<float>(ina_battery->getCharge()) / 3600.0f;
+        float soc = (INA_BATTERY_NOMINAL_AH + accumulated_ah) / INA_BATTERY_NOMINAL_AH;
+        return fmaxf(0.0f, fminf(1.0f, soc));  // clamp 0-1
+      });
+  auto bat_soc_meta = std::make_shared<SKMetadata>();
+  bat_soc_meta->units_ = "ratio";
+  bat_soc_meta->display_name_ = "State of Charge";
+  bat_soc_meta->short_name_ = "SoC";
+  auto bat_soc_out = std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.capacity.stateOfCharge", "", bat_soc_meta);
+  bat_soc->connect_to(bat_soc_out);
 
   // HTTP endpoint: reset INA228 accumulators — marks current state as "battery full".
   // Resets charge (C) and energy (J) counters to zero; values then represent
