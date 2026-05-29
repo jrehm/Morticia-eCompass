@@ -488,7 +488,7 @@ void setup() {
           httpd_resp_send(req, "Battery sensor not available", 0);
           return ESP_OK;
         }
-        ina_battery->setAccumulation(0);  // resets both charge and energy registers
+        ina_battery->setAccumulation(1);  // sets RSTACC bit — resets charge and energy registers (self-clearing)
         ESP_LOGI("eCompass", "Battery accumulators reset — full charge reference set");
         httpd_resp_set_type(req, "text/plain");
         httpd_resp_send(req, "Battery full reference set — accumulators reset", 0);
