@@ -42,6 +42,8 @@
 // Custom API endpoints — registered on SensESP's primary HTTP server (port 80)
 // via a local patch that adds get_http_server() to SensESPApp (see DECISIONS.md).
 #include "sensesp/net/http_server.h"
+#include <ArduinoJson.h>
+#include <Preferences.h>
 
 // Orientation sensor library
 #include "orientation_sensor.h"
@@ -122,6 +124,12 @@
 
 using namespace sensesp;
 
+// NVS-backed battery config — updated via POST /api/battery/configure.
+// Compile-time #defines are used as fallback defaults on first boot.
+static float g_battery_capacity_ah = INA_BATTERY_NOMINAL_AH;
+static float g_battery_nominal_v   = INA_BATTERY_NOMINAL_V;
+static float g_battery_seed_ah     = INA_BATTERY_NOMINAL_AH;  // Ah remaining at last configure
+
 // Deviation Table - enter via web UI or hard-code after compass swing
 class DeviationInterpolator : public CurveInterpolator {
  public:
@@ -143,6 +151,18 @@ void setup() {
   pinMode(4, OUTPUT);
   SetupLogging(ESP_LOG_INFO);
   ESP_LOGI(TAG, "Morticia eCompass v%s starting", FIRMWARE_VERSION);
+
+  // Load NVS-backed battery config (falls back to compile-time defaults if not yet set)
+  {
+    Preferences prefs;
+    prefs.begin("battery", true);
+    g_battery_capacity_ah = prefs.getFloat("capacity_ah", INA_BATTERY_NOMINAL_AH);
+    g_battery_nominal_v   = prefs.getFloat("nominal_v",   INA_BATTERY_NOMINAL_V);
+    g_battery_seed_ah     = prefs.getFloat("seed_ah",     INA_BATTERY_NOMINAL_AH);
+    prefs.end();
+  }
+  ESP_LOGI(TAG, "Battery config: %.1f Ah cap, %.1f Ah seed, %.1f V nominal",
+           g_battery_capacity_ah, g_battery_seed_ah, g_battery_nominal_v);
 
   // Build SensESP Application
   SensESPAppBuilder builder;
@@ -449,7 +469,7 @@ void setup() {
       POWER_REPORTING_INTERVAL_MS,
       [ina_battery, ina_battery_ok]() -> float {
         if (!ina_battery_ok) return NAN;
-        return static_cast<float>(ina_battery->getPower());
+        return static_cast<float>(ina_battery->getCurrent() * ina_battery->getBusVoltage());
       });
   auto bat_power_out = std::make_shared<SKOutput<float>>(
       "electrical.batteries.house.power", "");
@@ -470,7 +490,7 @@ void setup() {
       [ina_battery, ina_battery_ok]() -> float {
         if (!ina_battery_ok) return NAN;
         float accumulated_ah = static_cast<float>(ina_battery->getCharge()) / 3600.0f;
-        return INA_BATTERY_NOMINAL_AH + accumulated_ah;
+        return g_battery_seed_ah + accumulated_ah;
       });
   auto bat_remaining_ah_meta = std::make_shared<SKMetadata>();
   bat_remaining_ah_meta->units_ = "Ah";
@@ -486,7 +506,7 @@ void setup() {
       [ina_battery, ina_battery_ok]() -> float {
         if (!ina_battery_ok) return NAN;
         float accumulated_wh = static_cast<float>(ina_battery->getEnergy()) / 3600.0f;
-        return INA_BATTERY_NOMINAL_WH + accumulated_wh;
+        return (g_battery_seed_ah * g_battery_nominal_v) + accumulated_wh;
       });
   auto bat_remaining_wh_meta = std::make_shared<SKMetadata>();
   bat_remaining_wh_meta->units_ = "Wh";
@@ -502,7 +522,7 @@ void setup() {
       [ina_battery, ina_battery_ok]() -> float {
         if (!ina_battery_ok) return NAN;
         float accumulated_ah = static_cast<float>(ina_battery->getCharge()) / 3600.0f;
-        float soc = (INA_BATTERY_NOMINAL_AH + accumulated_ah) / INA_BATTERY_NOMINAL_AH;
+        float soc = (g_battery_seed_ah + accumulated_ah) / g_battery_capacity_ah;
         return fmaxf(0.0f, fminf(1.0f, soc));  // clamp 0-1
       });
   auto bat_soc_meta = std::make_shared<SKMetadata>();
@@ -513,12 +533,13 @@ void setup() {
       "electrical.batteries.house.capacity.stateOfCharge", "", bat_soc_meta);
   bat_soc->connect_to(bat_soc_out);
 
-  // HTTP endpoint: reset INA228 accumulators — marks current state as "battery full".
-  // Resets charge (C) and energy (J) counters to zero; values then represent
-  // Coulombs/Joules discharged since this reference point.
-  // Usage (from boat-panel): POST http://sensesp.local:8081/api/battery/set-full
-  auto set_full_handler = std::make_shared<HTTPRequestHandler>(
-      1 << HTTP_POST, "/api/battery/set-full",
+  // HTTP endpoint: seed battery SOC and update capacity/voltage from boat-panel.
+  // Body (all fields optional — omitting keeps the current NVS value):
+  //   {"capacity_ah": 100, "soc": 0.85, "nominal_v": 12.8}
+  // Updates NVS, resets INA228 accumulators, returns JSON confirmation.
+  // Usage: POST http://sensesp.local/api/battery/configure
+  auto configure_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_POST, "/api/battery/configure",
       [ina_battery, ina_battery_ok](httpd_req_t* req) {
         if (!ina_battery_ok) {
           httpd_resp_set_status(req, "503 Service Unavailable");
@@ -526,13 +547,40 @@ void setup() {
           httpd_resp_send(req, "Battery sensor not available", 0);
           return ESP_OK;
         }
-        ina_battery->setAccumulation(1);  // sets RSTACC bit — resets charge and energy registers (self-clearing)
-        ESP_LOGI("eCompass", "Battery accumulators reset — full charge reference set");
-        httpd_resp_set_type(req, "text/plain");
-        httpd_resp_send(req, "Battery full reference set — accumulators reset", 0);
+        char buf[256] = {};
+        int len = std::min((int)req->content_len, (int)sizeof(buf) - 1);
+        if (len > 0) httpd_req_recv(req, buf, len);
+
+        JsonDocument doc;
+        deserializeJson(doc, buf);
+        float capacity_ah = doc["capacity_ah"] | g_battery_capacity_ah;
+        float soc         = doc["soc"]         | 1.0f;
+        float nominal_v   = doc["nominal_v"]   | g_battery_nominal_v;
+
+        g_battery_capacity_ah = capacity_ah;
+        g_battery_nominal_v   = nominal_v;
+        g_battery_seed_ah     = capacity_ah * soc;
+
+        Preferences prefs;
+        prefs.begin("battery", false);
+        prefs.putFloat("capacity_ah", g_battery_capacity_ah);
+        prefs.putFloat("nominal_v",   g_battery_nominal_v);
+        prefs.putFloat("seed_ah",     g_battery_seed_ah);
+        prefs.end();
+
+        ina_battery->setAccumulation(1);
+        ESP_LOGI("eCompass", "Battery configured: %.1f Ah cap, SoC %.2f → %.1f Ah seed",
+                 capacity_ah, soc, g_battery_seed_ah);
+
+        char resp[128];
+        snprintf(resp, sizeof(resp),
+                 "{\"capacity_ah\":%.1f,\"soc\":%.3f,\"seed_ah\":%.1f,\"nominal_v\":%.1f}",
+                 g_battery_capacity_ah, soc, g_battery_seed_ah, g_battery_nominal_v);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
         return ESP_OK;
       });
-  sensesp_app->get_http_server()->add_handler(set_full_handler);
+  sensesp_app->get_http_server()->add_handler(configure_handler);
 #endif
 
   // --- Solar: voltage, current, power ---
@@ -560,7 +608,7 @@ void setup() {
       POWER_REPORTING_INTERVAL_MS,
       [ina_solar, ina_solar_ok]() -> float {
         if (!ina_solar_ok) return NAN;
-        return static_cast<float>(ina_solar->getPower());
+        return static_cast<float>(ina_solar->getCurrent() * ina_solar->getBusVoltage());
       });
   auto sol_power_out = std::make_shared<SKOutput<float>>(
       "electrical.solar.power", "");
