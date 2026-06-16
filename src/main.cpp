@@ -533,6 +533,21 @@ void setup() {
       "electrical.batteries.house.capacity.stateOfCharge", "", bat_soc_meta);
   bat_soc->connect_to(bat_soc_out);
 
+  // HTTP endpoint: return current NVS battery config (capacity, seed, nominal voltage).
+  // Usage: GET http://sensesp.local/api/battery/config
+  auto config_get_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_GET, "/api/battery/config",
+      [](httpd_req_t* req) {
+        char resp[128];
+        snprintf(resp, sizeof(resp),
+                 "{\"capacity_ah\":%.1f,\"seed_ah\":%.1f,\"nominal_v\":%.1f}",
+                 g_battery_capacity_ah, g_battery_seed_ah, g_battery_nominal_v);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(config_get_handler);
+
   // HTTP endpoint: seed battery SOC and update capacity/voltage from boat-panel.
   // Body (all fields optional — omitting keeps the current NVS value):
   //   {"capacity_ah": 100, "soc": 0.85, "nominal_v": 12.8}
