@@ -234,6 +234,7 @@ void setup() {
   const char* kSKPathMagFitTrial     = "orientation.calibration.magfittrial";
   const char* kSKPathMagSolver       = "orientation.calibration.magsolver";
   const char* kSKPathMagNoise        = "orientation.calibration.magnoise";
+  const char* kSKPathTemperature     = "environment.inside.ecompass.temperature";
   const char* kConfigPathNone = "";
 
   // ---- Initialize Orientation Sensor ----
@@ -378,6 +379,23 @@ void setup() {
   auto mag_noise_output = std::make_shared<SKOutput<float>>(
       kSKPathMagNoise, "", mag_noise_metadata);
   magnoise->connect_to(mag_noise_output);
+
+  // ========== TEMPERATURE (FXOS8700CQ onboard thermometer) ==========
+  // Published for correlating with heading/attitude drift; not yet used
+  // for any onboard compensation.
+  auto* sensor_temperature = new OrientationValues(
+      orientation_sensor, OrientationValues::kTemperature);
+  auto temperature = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      [sensor_temperature]() { return sensor_temperature->ReportValue(); });
+  auto temperature_metadata = std::make_shared<SKMetadata>();
+  temperature_metadata->units_ = "K";
+  temperature_metadata->description_ = "Temperature reported by orientation sensor IC";
+  temperature_metadata->display_name_ = "eCompass Temperature";
+  temperature_metadata->short_name_ = "Comp. T";
+  auto temperature_output = std::make_shared<SKOutput<float>>(
+      kSKPathTemperature, kConfigPathNone, temperature_metadata);
+  temperature->connect_to(temperature_output);
 
   // ========== MAG CAL SAVE BUTTON ==========
   auto* button_watcher = new DigitalInputChange(

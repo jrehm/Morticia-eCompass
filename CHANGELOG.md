@@ -15,6 +15,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- `environment.inside.ecompass.temperature` Signal K path — publishes the
+  FXOS8700CQ's onboard thermometer (`OrientationValues::kTemperature`,
+  reported in Kelvin) at the calibration-diagnostics interval (4s). No
+  compensation logic yet; intended to correlate against heading/attitude
+  drift to characterize thermal drift magnitude before deciding on a fix.
+
 ---
 
 ## [1.1.0] - 2026-05-29
