@@ -28,6 +28,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.2.1] - 2026-06-15
+
+### Added
+- `GET /api/battery/config` HTTP endpoint — returns current NVS battery
+  config (`capacity_ah`, `seed_ah`, `nominal_v`) so boat-panel can read and
+  display the active configuration
+
+---
+
+## [1.2.0] - 2026-06-15
+
+### Added
+- NVS-backed battery config: `capacity_ah`, `nominal_v`, and `seed_ah`
+  loaded from Preferences at startup; compile-time `#define`s serve as
+  fallback defaults on first boot
+- `/api/battery/configure` HTTP endpoint (replaces `/api/battery/set-full`):
+  accepts `{"capacity_ah": N, "soc": N, "nominal_v": V}` (all optional),
+  computes `seed_ah = capacity_ah * soc`, writes to NVS, resets the INA228
+  accumulator, and returns a JSON confirmation
+
+### Changed
+- Signed power: battery and solar power now computed as `current * voltage`,
+  following the current sign convention (negative = discharge/consuming,
+  positive = charge/producing)
+
+---
+
 ## [1.1.0] - 2026-05-29
 
 ### Added
