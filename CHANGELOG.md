@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- SensESP dependency pinned exact (`3.4.0`, no caret) — a caret range had
+  resolved to an untagged git-HEAD alpha (`3.4.1-alpha`) instead of the
+  intended registry release, breaking build reproducibility.
+- OrientationSensorFusion-ESP pinned to an exact commit. It's a transitive
+  dependency of `SignalK-Orientation`, whose own `library.json` declares it
+  as a bare git URL with no version constraint, so it floated to whatever
+  was on `main` at install time. No code change — pinned to the commit
+  already built and flashed.
+
 ---
 
 ## [1.2.3] - 2026-07-06
