@@ -15,6 +15,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- SensESP bumped `^3.3.0` → `^3.4.0`: user-configured hostname now persists
+  across reboots, v2-style IP address logging restored on network connect,
+  `StreamLineProducer` internal `emit()` fix, `esp_websocket_client` dropped
+  from SensESP's own manifest (no effect here — already declared directly in
+  `platformio.ini`). Pulls in ReactESP `3.3.1` (was `3.3.0`, which upstream
+  identified as broken under the C++14 Arduino-Espressif toolchain).
+- Reapplied local `get_http_server()` patch to `sensesp_app.h` — `http_server_`
+  remains `protected` in 3.4.0. See README § "Local SensESP Patches".
+
 ---
 
 ## [1.2.2] - 2026-07-04

@@ -218,9 +218,10 @@ Add with the other public getters (after `get_sk_delta()`):
 std::shared_ptr<HTTPServer> get_http_server() { return this->http_server_; }
 ```
 
-SensESP 3.3.x made `http_server_` protected with no public accessor. This
-one-line patch restores access so `/api/battery/set-full` and
-`/api/calibration/save-mag` can be registered on the primary HTTP server.
+SensESP 3.3.x/3.4.x keep `http_server_` protected with no public accessor
+(confirmed still true as of 3.4.0). This one-line patch restores access so
+`/api/battery/set-full` and `/api/calibration/save-mag` can be registered on
+the primary HTTP server.
 
 ## Known Upgrade Issues
 
