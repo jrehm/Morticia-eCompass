@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.2.3] - 2026-07-06
+
 ### Changed
 - SensESP bumped `^3.3.0` → `^3.4.0`: user-configured hostname now persists
   across reboots, v2-style IP address logging restored on network connect,
