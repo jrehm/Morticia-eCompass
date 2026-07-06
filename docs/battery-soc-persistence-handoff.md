@@ -3,6 +3,9 @@
 > **PLANNING DOCUMENT** — not yet implemented. Written from a design discussion
 > in `morticia-project` on 2026-07-06. Current firmware is `main.cpp` as of
 > commit `ec25c59` (v1.2.1 line — see `CHANGELOG.md`).
+>
+> **2026-07-06 update:** open parameters below decided; implementation planning
+> underway. See "Decided Parameters" section.
 
 ## Purpose
 
@@ -67,12 +70,18 @@ event_loop()->onRepeat(CHECKPOINT_INTERVAL_MS, []() {
 });
 ```
 
-**Open parameter:** checkpoint cadence. Candidates discussed: a fixed interval
-(15-30 min) OR only when `remaining_ah` has moved >1% since the last
-checkpoint, whichever comes first — bounds both staleness *and* flash wear
-(NVS/flash has finite write endurance; checkpointing every few minutes for
-months is worth avoiding). Not yet decided — needs picking before
-implementation.
+**Decided: fixed 30-minute interval, no %-change trigger.** The %-change
+half of the original candidate was dropped — the full-charge detector
+(mechanism #2, below) already handles "a meaningful event just happened,
+persist it now" by writing immediately when it fires, so the periodic timer
+only needs to bound worst-case staleness after an *unplanned* reset, not
+also react to magnitude of change. Flash wear is a non-issue at this cadence
+regardless (~17,500 writes/year, trivial against NVS wear-leveled endurance).
+Tradeoff: a fast shore-power bulk charge that completes and reverses within
+a 30-min window right before a power loss would still be lost to staleness —
+narrow edge case; shrinking to 15 min (still trivial for flash wear) is a
+cheaper fix than adding the %-change trigger back if this shows up in
+practice.
 
 ### 2. Automated full-charge detection (corrects drift, not just staleness)
 
@@ -98,15 +107,49 @@ several minutes to tens of minutes) before auto-seeding to 100%, and probably
 needs hysteresis/percentage-of-samples logic rather than a single continuous
 streak, since even genuine full-charge periods will have brief dips.
 
-**Open parameters (not yet decided):**
-- Voltage threshold (candidate: close to the Genasun GV-10's 14.6V lithium
-  absorption setpoint, but see data below — battery never actually reached
-  14.6V on a cloudy day, topping out at 14.43V, so the threshold may need to
-  sit lower than the charger's nominal setpoint, or the dwell-time design
-  needs to be robust enough that threshold choice matters less)
-- Current threshold for "tapering"
-- Dwell duration and whether it's a continuous streak vs. a duty-cycle/
-  percentage-based check over a rolling window
+**Decided:**
+- **Voltage threshold: ≥14.4V** (not 14.6V). Setting it near the charger's
+  actual absorption setpoint risks the detector never firing on marginal
+  days (peak observed was 14.43V on a cloudy day) — undermining the point of
+  an automatic ground-truth correction. 14.4V is a reasonable "effectively
+  full" line specifically because this is a 4S LiFePO4 pack (`nominal_v:
+  12.8`): that chemistry has a flat voltage curve through the middle of its
+  range and only rises steeply near the top, so 14.4V at near-zero current
+  is already deep into >95% SoC regardless of whether 14.6V was technically
+  reached.
+- **Current threshold: |current| ≤ 0.2A** — unchanged from the original naive
+  guess. The false-positive example (14.424V @ 0.108A) would satisfy *any*
+  reasonable threshold, tight or loose — that's the actual finding: no
+  static threshold alone solves this, so no design effort was spent
+  tightening it further. The dwell logic below is what discriminates the
+  false positive from a real one.
+- **Dwell design: rolling 20-minute window, ≥80% of samples must pass.**
+  Rejected continuous-streak: a passing cloud can dip below threshold for a
+  few minutes even during a genuinely successful absorption/full period, and
+  a streak-reset-to-zero design means one dip erases all progress — in bad
+  weather the streak might never complete. A percentage-based rolling window
+  tolerates those dips by design. The false-positive sample was isolated (15
+  min later, voltage had dropped to 14.05V discharging at -0.39A) — a
+  20-minute window straddling that timestamp would see mostly failing
+  samples and correctly reject it; a genuine full/float period typically
+  holds near setpoint for tens of minutes to hours, easily clearing 80%.
+
+Tradeoff for both dwell parameters: shorter window / higher pass-% triggers
+faster but is more false-positive-prone; longer window / lower pass-%
+is more forgiving of real dips but slower to react and slightly more
+permissive of marginal conditions. 20 min / 80% is a starting point, not
+precision-tuned — cheap to adjust later since it's just constants, no new
+sensor plumbing.
+
+**Additional design point surfaced during this discussion (not one of the
+original three, but a direct consequence of #2/#3 above):** the detector
+needs an edge-trigger/cooldown guard, or it will re-seed every 20 minutes
+for as long as the battery sits at float voltage (hours). Plan: track a
+bool, only act on the *transition* into the "full" state (false→true), and
+reset that bool once voltage drops clearly below threshold for a while
+(e.g. <14.0V), signaling a new discharge cycle has begun. This avoids both
+pointless repeated NVS writes and interaction weirdness with the periodic
+checkpoint above.
 
 ### 3. Manual entry from the battery's Bluetooth app (secondary/backup only)
 
@@ -159,22 +202,33 @@ implied-load-is-flat signal clearly.
 
 ## What Needs to Happen
 
-### Decisions still needed
-- [ ] Checkpoint interval / change-threshold for periodic NVS writeback
-- [ ] Voltage/current thresholds and dwell-time design for auto-full-detection
-- [ ] Whether dwell logic is a continuous streak or a rolling-window
-      percentage check
+### Decisions (2026-07-06 — see "Decided Strategy" above for rationale/tradeoffs)
+- [x] Checkpoint interval: fixed 30 minutes, no %-change trigger
+- [x] Full-charge thresholds: voltage ≥14.4V, |current| ≤0.2A
+- [x] Dwell logic: rolling 20-minute window, ≥80% of samples must pass
+- [x] Edge-trigger/cooldown guard for the full-charge detector (surfaced
+      during this discussion, not in the original three)
 
-### Firmware (pending, after decisions above)
-- [ ] Add periodic checkpoint timer (`event_loop()->onRepeat`) writing
+### Firmware (implemented in v1.3.0 — `src/main.cpp`)
+- [x] Add periodic checkpoint timer (`event_loop()->onRepeat`) writing
       `remaining_ah` to NVS `"seed_ah"` + resetting the INA228 accumulator,
       mirroring the existing `/api/battery/configure` handler's persistence
       logic
-- [ ] Implement full-charge detector with dwell time, auto-calling the same
+- [x] Implement full-charge detector with dwell time, auto-calling the same
       seed/reset logic as `/api/battery/configure` when triggered
-- [ ] Test against a real cloudy-day trace (or replay the 2026-07-05 data) to
-      confirm the detector doesn't false-trigger on solar variability
-- [ ] Update README/CHANGELOG
+- [x] Update CHANGELOG
+- [ ] **Real-world soak test still needed.** Hand-traced against this doc's
+      2026-07-05/06 data: the false-positive rejection is well-supported (the
+      afternoon's described current variability — cycling -0.9A to +1.5A
+      every 15-40 min — would keep a 20-minute window well under the 80%
+      pass bar). The *acceptance* case (a genuine sustained full/float period
+      actually reaching 80%) is **not** confirmed against real data — that
+      day was cloudy and never produced a real full-charge event to check
+      against (peak was 14.43V, the same event flagged as the false
+      positive). Needs a few real charge cycles, ideally including at least
+      one sunny day, observed via the new `full_charge_pass_ratio` /
+      `full_charge_latched` fields on `GET /api/battery/config`, before this
+      is considered validated.
 
 ### Documentation
 - [ ] Once implemented, check off the "Automated battery-full detection" item

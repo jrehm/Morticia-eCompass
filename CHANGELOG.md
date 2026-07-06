@@ -15,6 +15,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.3.0] - 2026-07-06
+
+### Added
+- Battery SoC persistence: periodic NVS checkpoint (30 min) bounds SoC
+  staleness after an unplanned power loss, and an automated full-charge
+  detector (rolling 20-minute window, 80% pass threshold on voltage
+  ≥14.4V / |current| ≤0.2A, edge-triggered with 14.0V hysteresis reset)
+  auto-seeds SoC to 100% on genuine full-charge events, correcting
+  coulomb-counting drift without manual intervention. See
+  `docs/battery-soc-persistence-handoff.md` for the design rationale and
+  threshold/dwell-time tradeoffs.
+- `GET /api/battery/config` now also reports `full_charge_pass_ratio` and
+  `full_charge_latched`, so the detector can be observed live during a
+  soak test without needing serial/USB access.
+
 ### Fixed
 - SensESP dependency pinned exact (`3.4.0`, no caret) — a caret range had
   resolved to an untagged git-HEAD alpha (`3.4.1-alpha`) instead of the

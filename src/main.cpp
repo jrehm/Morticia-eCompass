@@ -112,6 +112,27 @@
 // If remaining values increase during discharge, swap shunt sense wires (IN+/IN-)
 // or negate the getCharge()/getEnergy() calls below.
 
+// Battery SoC persistence — see docs/battery-soc-persistence-handoff.md for
+// the full rationale and tradeoffs behind these values.
+//
+// Periodic NVS checkpoint: bounds SoC staleness after an unplanned power
+// loss. Does not correct drift — see full-charge detector below for that.
+#define CHECKPOINT_INTERVAL_MS           (30 * 60 * 1000)  // 30 min
+
+// Automated full-charge detection: when voltage/current sit within these
+// bounds for most of a rolling window, auto-seed SoC to 100%. Thresholds are
+// deliberately not tightened beyond the original naive guess — dwell-time
+// filtering (not threshold precision) is what rejects passing-cloud false
+// positives; see the handoff doc's InfluxDB analysis.
+#define FULL_CHARGE_VOLTAGE_THRESHOLD_V  (14.4f)   // 4S LiFePO4: ~95%+ SoC at near-zero current
+#define FULL_CHARGE_CURRENT_THRESHOLD_A  (0.2f)    // "tapering"
+#define FULL_CHARGE_RESET_VOLTAGE_V      (14.0f)   // hysteresis: below this, a new discharge cycle has begun
+#define FULL_CHARGE_SAMPLE_INTERVAL_MS   (10 * 1000)      // 10 s sampling cadence
+#define FULL_CHARGE_WINDOW_MINUTES       (20)
+#define FULL_CHARGE_WINDOW_SAMPLES \
+    (FULL_CHARGE_WINDOW_MINUTES * 60 * 1000 / FULL_CHARGE_SAMPLE_INTERVAL_MS)  // 120
+#define FULL_CHARGE_PASS_RATIO           (0.80f)
+
 // Connectivity watchdog: reboot ESP32 if Signal K connection
 // is lost for this many milliseconds. Handles edge cases where
 // the SKWSClient retry loop gets stuck in a non-disconnected
@@ -129,6 +150,15 @@ using namespace sensesp;
 static float g_battery_capacity_ah = INA_BATTERY_NOMINAL_AH;
 static float g_battery_nominal_v   = INA_BATTERY_NOMINAL_V;
 static float g_battery_seed_ah     = INA_BATTERY_NOMINAL_AH;  // Ah remaining at last configure
+
+// Full-charge detector state — file scope (not a local static in setup())
+// so /api/battery/config can report live detector status. See
+// docs/battery-soc-persistence-handoff.md for the dwell-time design.
+static bool full_charge_samples[FULL_CHARGE_WINDOW_SAMPLES] = {};
+static size_t full_charge_sample_idx = 0;
+static size_t full_charge_samples_filled = 0;
+static uint16_t full_charge_pass_count = 0;
+static bool full_charge_latched = false;
 
 // Deviation Table - enter via web UI or hard-code after compass swing
 class DeviationInterpolator : public CurveInterpolator {
@@ -551,15 +581,22 @@ void setup() {
       "electrical.batteries.house.capacity.stateOfCharge", "", bat_soc_meta);
   bat_soc->connect_to(bat_soc_out);
 
-  // HTTP endpoint: return current NVS battery config (capacity, seed, nominal voltage).
+  // HTTP endpoint: return current NVS battery config (capacity, seed, nominal voltage),
+  // plus live full-charge detector status (see docs/battery-soc-persistence-handoff.md) —
+  // lets a real-world soak test be observed over HTTP instead of requiring serial/USB access.
   // Usage: GET http://sensesp.local/api/battery/config
   auto config_get_handler = std::make_shared<HTTPRequestHandler>(
       1 << HTTP_GET, "/api/battery/config",
       [](httpd_req_t* req) {
-        char resp[128];
+        float pass_ratio = full_charge_samples_filled > 0
+            ? static_cast<float>(full_charge_pass_count) / full_charge_samples_filled
+            : 0.0f;
+        char resp[256];
         snprintf(resp, sizeof(resp),
-                 "{\"capacity_ah\":%.1f,\"seed_ah\":%.1f,\"nominal_v\":%.1f}",
-                 g_battery_capacity_ah, g_battery_seed_ah, g_battery_nominal_v);
+                 "{\"capacity_ah\":%.1f,\"seed_ah\":%.1f,\"nominal_v\":%.1f,"
+                 "\"full_charge_pass_ratio\":%.3f,\"full_charge_latched\":%s}",
+                 g_battery_capacity_ah, g_battery_seed_ah, g_battery_nominal_v,
+                 pass_ratio, full_charge_latched ? "true" : "false");
         httpd_resp_set_type(req, "application/json");
         httpd_resp_send(req, resp, strlen(resp));
         return ESP_OK;
@@ -614,6 +651,68 @@ void setup() {
         return ESP_OK;
       });
   sensesp_app->get_http_server()->add_handler(configure_handler);
+
+  // Periodic NVS checkpoint — bounds SoC staleness after an unplanned power
+  // loss to at most CHECKPOINT_INTERVAL_MS. Mirrors /api/battery/configure's
+  // persistence logic. Does not correct drift — see full-charge detector below.
+  event_loop()->onRepeat(CHECKPOINT_INTERVAL_MS, [ina_battery, ina_battery_ok]() {
+    if (!ina_battery_ok) return;
+    float accumulated_ah = static_cast<float>(ina_battery->getCharge()) / 3600.0f;
+    float remaining_ah = g_battery_seed_ah + accumulated_ah;
+
+    Preferences prefs;
+    prefs.begin("battery", false);
+    prefs.putFloat("seed_ah", remaining_ah);
+    prefs.end();
+
+    g_battery_seed_ah = remaining_ah;
+    ina_battery->setAccumulation(1);
+    ESP_LOGI("eCompass", "Battery checkpoint: %.2f Ah seed persisted", remaining_ah);
+  });
+
+  // Automated full-charge detection — the anti-drift complement to the
+  // periodic checkpoint above. See docs/battery-soc-persistence-handoff.md
+  // for the threshold/dwell-time rationale and tradeoffs.
+  event_loop()->onRepeat(FULL_CHARGE_SAMPLE_INTERVAL_MS, [ina_battery, ina_battery_ok]() {
+    if (!ina_battery_ok) return;
+
+    float voltage = static_cast<float>(ina_battery->getBusVoltage());
+    float current = static_cast<float>(ina_battery->getCurrent());
+    bool sample_passes = (voltage >= FULL_CHARGE_VOLTAGE_THRESHOLD_V) &&
+                          (fabsf(current) <= FULL_CHARGE_CURRENT_THRESHOLD_A);
+
+    bool &slot = full_charge_samples[full_charge_sample_idx];
+    if (full_charge_samples_filled >= FULL_CHARGE_WINDOW_SAMPLES) {
+      if (slot) full_charge_pass_count--;
+    } else {
+      full_charge_samples_filled++;
+    }
+    slot = sample_passes;
+    if (slot) full_charge_pass_count++;
+    full_charge_sample_idx = (full_charge_sample_idx + 1) % FULL_CHARGE_WINDOW_SAMPLES;
+
+    // New discharge cycle started — allow the detector to fire again next time.
+    if (voltage < FULL_CHARGE_RESET_VOLTAGE_V) {
+      full_charge_latched = false;
+    }
+
+    if (full_charge_latched) return;
+    if (full_charge_samples_filled < FULL_CHARGE_WINDOW_SAMPLES) return;
+
+    float pass_ratio = static_cast<float>(full_charge_pass_count) / FULL_CHARGE_WINDOW_SAMPLES;
+    if (pass_ratio >= FULL_CHARGE_PASS_RATIO) {
+      g_battery_seed_ah = g_battery_capacity_ah;
+      Preferences prefs;
+      prefs.begin("battery", false);
+      prefs.putFloat("seed_ah", g_battery_seed_ah);
+      prefs.end();
+      ina_battery->setAccumulation(1);
+      full_charge_latched = true;
+      ESP_LOGI("eCompass",
+               "Auto full-charge detected (%.0f%% of window passed) — SoC seeded to 100%% (%.1f Ah)",
+               pass_ratio * 100.0f, g_battery_seed_ah);
+    }
+  });
 #endif
 
   // --- Solar: voltage, current, power ---
