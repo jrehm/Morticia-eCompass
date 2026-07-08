@@ -160,6 +160,12 @@ static size_t full_charge_samples_filled = 0;
 static uint16_t full_charge_pass_count = 0;
 static bool full_charge_latched = false;
 
+static float GetFullChargePassRatio() {
+  return full_charge_samples_filled > 0
+      ? static_cast<float>(full_charge_pass_count) / full_charge_samples_filled
+      : 0.0f;
+}
+
 // Deviation Table - enter via web UI or hard-code after compass swing
 class DeviationInterpolator : public CurveInterpolator {
  public:
@@ -581,6 +587,27 @@ void setup() {
       "electrical.batteries.house.capacity.stateOfCharge", "", bat_soc_meta);
   bat_soc->connect_to(bat_soc_out);
 
+  // Full-charge detector observability, published to Signal K so historic
+  // detector behavior is queryable from the same InfluxDB history already
+  // used for electrical.batteries.house.{voltage,current} — see the
+  // diagnostic method in docs/battery-soc-persistence-handoff.md. Without
+  // this, the detector's state is only ever visible at the instant you poll
+  // it, and the latch's own hysteresis reset erases any earlier trigger by
+  // the time the next discharge cycle begins.
+  auto full_charge_pass_ratio_sensor = std::make_shared<RepeatSensor<float>>(
+      FULL_CHARGE_SAMPLE_INTERVAL_MS,
+      []() -> float { return GetFullChargePassRatio(); });
+  auto full_charge_pass_ratio_out = std::make_shared<SKOutput<float>>(
+      "electrical.batteries.house.fullChargeDetector.passRatio", "");
+  full_charge_pass_ratio_sensor->connect_to(full_charge_pass_ratio_out);
+
+  auto full_charge_latched_sensor = std::make_shared<RepeatSensor<bool>>(
+      FULL_CHARGE_SAMPLE_INTERVAL_MS,
+      []() -> bool { return full_charge_latched; });
+  auto full_charge_latched_out = std::make_shared<SKOutput<bool>>(
+      "electrical.batteries.house.fullChargeDetector.latched", "");
+  full_charge_latched_sensor->connect_to(full_charge_latched_out);
+
   // HTTP endpoint: return current NVS battery config (capacity, seed, nominal voltage),
   // plus live full-charge detector status (see docs/battery-soc-persistence-handoff.md) —
   // lets a real-world soak test be observed over HTTP instead of requiring serial/USB access.
@@ -588,9 +615,7 @@ void setup() {
   auto config_get_handler = std::make_shared<HTTPRequestHandler>(
       1 << HTTP_GET, "/api/battery/config",
       [](httpd_req_t* req) {
-        float pass_ratio = full_charge_samples_filled > 0
-            ? static_cast<float>(full_charge_pass_count) / full_charge_samples_filled
-            : 0.0f;
+        float pass_ratio = GetFullChargePassRatio();
         char resp[256];
         snprintf(resp, sizeof(resp),
                  "{\"capacity_ah\":%.1f,\"seed_ah\":%.1f,\"nominal_v\":%.1f,"

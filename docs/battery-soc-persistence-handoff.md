@@ -226,9 +226,16 @@ implied-load-is-flat signal clearly.
       day was cloudy and never produced a real full-charge event to check
       against (peak was 14.43V, the same event flagged as the false
       positive). Needs a few real charge cycles, ideally including at least
-      one sunny day, observed via the new `full_charge_pass_ratio` /
-      `full_charge_latched` fields on `GET /api/battery/config`, before this
-      is considered validated.
+      one sunny day, before this is considered validated.
+- [x] **v1.3.1:** `full_charge_pass_ratio` / `full_charge_latched` also
+      published to Signal K (`electrical.batteries.house.fullChargeDetector.
+      {passRatio,latched}`), not just the `GET /api/battery/config` snapshot —
+      the HTTP endpoint only showed the current instant, and the latch's own
+      hysteresis reset erased evidence of any earlier trigger before the next
+      poll. This makes the soak test above checkable retroactively from
+      InfluxDB history (same query method as the original cloudy-day
+      analysis) rather than requiring live polling during the exact window a
+      full-charge event happens.
 
 ### Documentation
 - [ ] Once implemented, check off the "Automated battery-full detection" item

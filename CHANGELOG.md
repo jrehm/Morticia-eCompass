@@ -17,6 +17,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.1] - 2026-07-08
+
+### Added
+- Full-charge detector's `passRatio` and `latched` state now also published
+  to Signal K (`electrical.batteries.house.fullChargeDetector.{passRatio,
+  latched}`), not just the `GET /api/battery/config` snapshot. The HTTP
+  endpoint only ever showed the current instant, and the latch's own
+  hysteresis reset erases any earlier trigger before the next poll — this
+  makes detector behavior queryable from the same InfluxDB history already
+  used for `electrical.batteries.house.{voltage,current}`, closing the gap
+  needed to validate the detector's real-world soak test.
+
+---
+
 ## [1.3.0] - 2026-07-06
 
 ### Added
