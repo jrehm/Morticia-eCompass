@@ -148,6 +148,36 @@ pio run -t upload --upload-port 192.168.8.214
 
 The auth password is configured in `platformio.ini` via `upload_flags`.
 
+**This only works from a machine physically on the boat's local WiFi**
+(the GL-X750 travel router, SSID `Morticia`, subnet `192.168.8.0/24`) — the
+ESP32's `192.168.8.214` address isn't reachable from anywhere else. In
+particular, **a dev machine connected only via Tailscale cannot reach it**:
+HALOS (`halos`, Tailscale IP `100.64.200.98`) is on the boat LAN too
+(`192.168.8.102`), but does not advertise `192.168.8.0/24` as a Tailscale
+subnet route, so Tailscale gives no path in. (`ping 192.168.8.214` from an
+off-boat-LAN machine will simply time out — that's the symptom, not a
+firmware or auth problem.)
+
+**Workaround — flash via HALOS**, which shares the boat LAN with the ESP32:
+
+```bash
+# From the dev machine, build first, then:
+scp .pio/build/shesp32/firmware.bin halos:/tmp/ecompass-firmware.bin
+ssh halos "python3 /home/pi/espota.py -i 192.168.8.214 -a morticia \
+    -f /tmp/ecompass-firmware.bin -r -d -t 30"
+ssh halos "rm -f /tmp/ecompass-firmware.bin"   # cleanup
+```
+
+`espota.py` is already present on HALOS at `/home/pi/espota.py` (a standalone
+copy of the same script PlatformIO's `pio run -t upload` uses internally, from
+`~/.platformio/packages/framework-arduinoespressif32/tools/espota.py` —
+no PlatformIO install needed on HALOS itself, just Python 3, which HALOS has).
+After flashing, sanity-check the device came back up, e.g.:
+
+```bash
+ssh halos "curl -s http://192.168.8.214/api/battery/config"  # or any GET endpoint the firmware exposes
+```
+
 ### Magnetic calibration
 
 After power-on, rotate the sensor through various orientations for 15–30 seconds.

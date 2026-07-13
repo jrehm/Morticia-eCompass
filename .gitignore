@@ -5,3 +5,10 @@
 .vscode/ipch
 .claude/
 .DS_Store
+
+# thermal-drift analysis: secrets and generated data
+analysis/thermal-drift/.env
+analysis/thermal-drift/data/*.csv
+analysis/thermal-drift/data/*.parquet
+analysis/thermal-drift/.venv/
+

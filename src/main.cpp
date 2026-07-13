@@ -36,8 +36,11 @@
 // For Attitude (combined roll, pitch, yaw) output
 #include "sensesp/signalk/signalk_types.h"
 
-// For temperature calibration
-#include "sensesp/transforms/linear.h"
+// For thermal drift compensation (combines heading + temperature, see
+// docs/thermal-drift-compensation-handoff.md)
+#include "sensesp/transforms/zip.h"
+#include "sensesp/transforms/lambda_transform.h"
+#include <tuple>
 
 // Custom API endpoints — registered on SensESP's primary HTTP server (port 80)
 // via a local patch that adds get_http_server() to SensESPApp (see DECISIONS.md).
@@ -151,6 +154,15 @@ static float g_battery_capacity_ah = INA_BATTERY_NOMINAL_AH;
 static float g_battery_nominal_v   = INA_BATTERY_NOMINAL_V;
 static float g_battery_seed_ah     = INA_BATTERY_NOMINAL_AH;  // Ah remaining at last configure
 
+// NVS-backed thermal compensation coefficients — updated via POST
+// /api/thermal/config. Compile-time defaults are the fit from the
+// 2026-07-13 analysis (analysis/thermal-drift/ in morticia-project,
+// -1.021 deg/C, T_ref 30.07 C); see docs/thermal-drift-compensation-handoff.md.
+static constexpr float kThermalSlopeRadPerKDefault = -0.017822f;
+static constexpr float kThermalRefTempKDefault = 303.222f;
+static float g_thermal_slope_rad_per_k = kThermalSlopeRadPerKDefault;
+static float g_thermal_ref_temp_k = kThermalRefTempKDefault;
+
 // Full-charge detector state — file scope (not a local static in setup())
 // so /api/battery/config can report live detector status. See
 // docs/battery-soc-persistence-handoff.md for the dwell-time design.
@@ -199,6 +211,19 @@ void setup() {
   }
   ESP_LOGI(TAG, "Battery config: %.1f Ah cap, %.1f Ah seed, %.1f V nominal",
            g_battery_capacity_ah, g_battery_seed_ah, g_battery_nominal_v);
+
+  // Load NVS-backed thermal compensation coefficients (falls back to
+  // compile-time defaults if not yet set) — see
+  // docs/thermal-drift-compensation-handoff.md
+  {
+    Preferences prefs;
+    prefs.begin("thermalcomp", true);
+    g_thermal_slope_rad_per_k = prefs.getFloat("slope", kThermalSlopeRadPerKDefault);
+    g_thermal_ref_temp_k      = prefs.getFloat("tref_k", kThermalRefTempKDefault);
+    prefs.end();
+  }
+  ESP_LOGI(TAG, "Thermal compensation: slope %.6f rad/K, T_ref %.2f K",
+           g_thermal_slope_rad_per_k, g_thermal_ref_temp_k);
 
   // Build SensESP Application
   SensESPAppBuilder builder;
@@ -287,12 +312,59 @@ void setup() {
   event_loop()->onRepeat(fusionIntervalMs,
       [orientation_sensor]() { orientation_sensor->ReadAndProcessSensors(); });
 
+  // ========== TEMPERATURE (FXOS8700CQ onboard thermometer) ==========
+  // Created before COMPASS HEADING (moved up from its original position
+  // later in setup()) because the thermal compensation transform below
+  // needs both `compass_heading` and `temperature` producers to exist
+  // before it can zip them together. See
+  // docs/thermal-drift-compensation-handoff.md.
+  auto* sensor_temperature = new OrientationValues(
+      orientation_sensor, OrientationValues::kTemperature);
+  auto temperature = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      [sensor_temperature]() { return sensor_temperature->ReportValue(); });
+  auto temperature_metadata = std::make_shared<SKMetadata>();
+  temperature_metadata->units_ = "K";
+  temperature_metadata->description_ = "Temperature reported by orientation sensor IC";
+  temperature_metadata->display_name_ = "eCompass Temperature";
+  temperature_metadata->short_name_ = "Comp. T";
+  auto temperature_output = std::make_shared<SKOutput<float>>(
+      kSKPathTemperature, kConfigPathNone, temperature_metadata);
+  temperature->connect_to(temperature_output);
+
   // ========== COMPASS HEADING ==========
   auto* sensor_heading = new OrientationValues(
       orientation_sensor, OrientationValues::kCompassHeading);
   auto compass_heading = std::make_shared<RepeatSensor<float>>(
       ORIENTATION_REPORTING_INTERVAL_MS,
       [sensor_heading]() { return sensor_heading->ReportValue(); });
+
+  // Thermal drift compensation — see docs/thermal-drift-compensation-handoff.md
+  // for the derivation. Combines the raw heading and temperature producers
+  // into a tuple (Zip), then applies a linear correction fitted against
+  // 5 days of dockside data (-1.021 deg/C, no lag, no hysteresis, so a
+  // simple linear fit is sufficient — no lookup table needed).
+  // max_age=10000ms: temperature reports every CALIBRATION_REPORTING_INTERVAL_MS
+  // (4000ms), so 10s gives comfortable margin without masking a real sensor stall.
+  auto* thermal_zip = new Zip<float, float>(10000);
+  compass_heading->connect_to(std::get<0>(thermal_zip->consumers));
+  temperature->connect_to(std::get<1>(thermal_zip->consumers));
+
+  auto thermal_compensation = std::make_shared<
+      LambdaTransform<std::tuple<float, float>, float>>(
+      [](std::tuple<float, float> input) -> float {
+        float heading_rad = std::get<0>(input);
+        float temp_k = std::get<1>(input);
+        // Subtract, not add: heading residual = slope*(T-Tref) (slope is
+        // negative), so to cancel it out we need -slope*(T-Tref). Verified
+        // numerically against analysis/thermal-drift/validate.py's
+        // apply_correction() -- the "+" form was tried first and confirmed
+        // (by rerunning it against the cleaned dataset) to double the drift
+        // instead of removing it.
+        return heading_rad -
+               g_thermal_slope_rad_per_k * (temp_k - g_thermal_ref_temp_k);
+      });
+  thermal_zip->connect_to(thermal_compensation);
 
   auto compass_sk_output = std::make_shared<SKOutput<float>>(
       kSKPathHeadingCompass, kConfigPathNone);
@@ -314,12 +386,70 @@ void setup() {
   auto magneticheading_sk_output = std::make_shared<SKOutput<float>>(
       kSKPathHeadingMagnetic, kConfigPathNone);
 
-  compass_heading
+  thermal_compensation
       ->connect_to(mountingOffset)
       ->connect_to(compass_sk_output)
       ->connect_to(deviationInterpolator)
       ->connect_to(new AngleCorrection(0.0, 0.0, kConfigPathNone))
       ->connect_to(magneticheading_sk_output);
+
+  // HTTP endpoint: return current thermal compensation coefficients
+  // (human units: deg/C, C). See docs/thermal-drift-compensation-handoff.md.
+  // Usage: GET http://sensesp.local/api/thermal/config
+  auto thermal_config_get_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_GET, "/api/thermal/config",
+      [](httpd_req_t* req) {
+        char resp[160];
+        snprintf(resp, sizeof(resp),
+                 "{\"slope_deg_per_c\":%.4f,\"tref_c\":%.3f}",
+                 g_thermal_slope_rad_per_k * (180.0f / PI),
+                 g_thermal_ref_temp_k - 273.15f);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(thermal_config_get_handler);
+
+  // HTTP endpoint: update thermal compensation coefficients (e.g. after a
+  // future re-run of analysis/thermal-drift/) without a reflash.
+  // Body (both fields optional — omitting keeps the current NVS value):
+  //   {"slope_deg_per_c": -1.021, "tref_c": 30.07}
+  // Updates NVS, returns JSON confirmation.
+  // Usage: POST http://sensesp.local/api/thermal/config
+  auto thermal_config_post_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_POST, "/api/thermal/config",
+      [](httpd_req_t* req) {
+        char buf[128] = {};
+        int len = std::min((int)req->content_len, (int)sizeof(buf) - 1);
+        if (len > 0) httpd_req_recv(req, buf, len);
+
+        JsonDocument doc;
+        deserializeJson(doc, buf);
+        float slope_deg_per_c = doc["slope_deg_per_c"] |
+            (g_thermal_slope_rad_per_k * (180.0f / PI));
+        float tref_c = doc["tref_c"] | (g_thermal_ref_temp_k - 273.15f);
+
+        g_thermal_slope_rad_per_k = slope_deg_per_c * (PI / 180.0f);
+        g_thermal_ref_temp_k = tref_c + 273.15f;
+
+        Preferences prefs;
+        prefs.begin("thermalcomp", false);
+        prefs.putFloat("slope", g_thermal_slope_rad_per_k);
+        prefs.putFloat("tref_k", g_thermal_ref_temp_k);
+        prefs.end();
+
+        ESP_LOGI("eCompass", "Thermal compensation configured: %.4f deg/C, T_ref %.2f C",
+                 slope_deg_per_c, tref_c);
+
+        char resp[128];
+        snprintf(resp, sizeof(resp),
+                 "{\"slope_deg_per_c\":%.4f,\"tref_c\":%.3f}",
+                 slope_deg_per_c, tref_c);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(thermal_config_post_handler);
 
   // ========== ATTITUDE (yaw, pitch, roll) ==========
   auto* sensor_roll = new OrientationValues(
@@ -415,23 +545,6 @@ void setup() {
   auto mag_noise_output = std::make_shared<SKOutput<float>>(
       kSKPathMagNoise, "", mag_noise_metadata);
   magnoise->connect_to(mag_noise_output);
-
-  // ========== TEMPERATURE (FXOS8700CQ onboard thermometer) ==========
-  // Published for correlating with heading/attitude drift; not yet used
-  // for any onboard compensation.
-  auto* sensor_temperature = new OrientationValues(
-      orientation_sensor, OrientationValues::kTemperature);
-  auto temperature = std::make_shared<RepeatSensor<float>>(
-      CALIBRATION_REPORTING_INTERVAL_MS,
-      [sensor_temperature]() { return sensor_temperature->ReportValue(); });
-  auto temperature_metadata = std::make_shared<SKMetadata>();
-  temperature_metadata->units_ = "K";
-  temperature_metadata->description_ = "Temperature reported by orientation sensor IC";
-  temperature_metadata->display_name_ = "eCompass Temperature";
-  temperature_metadata->short_name_ = "Comp. T";
-  auto temperature_output = std::make_shared<SKOutput<float>>(
-      kSKPathTemperature, kConfigPathNone, temperature_metadata);
-  temperature->connect_to(temperature_output);
 
   // ========== MAG CAL SAVE BUTTON ==========
   auto* button_watcher = new DigitalInputChange(

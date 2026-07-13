@@ -17,6 +17,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.2] - 2026-07-13
+
+### Added
+- Thermal drift compensation for `navigation.headingCompass` /
+  `navigation.headingMagnetic`. A 5-day dockside analysis
+  (`analysis/thermal-drift/`, see `docs/thermal-drift-compensation-handoff.md`)
+  found a real, linear, ~-1.02 deg/C relationship between eCompass temperature
+  and heading (no lag, no hysteresis) — up to ~9 deg of avoidable error over
+  a typical diurnal temperature swing. Correction is applied via a new
+  `Zip<float,float>` + `LambdaTransform` combining `compass_heading` and
+  `environment.inside.ecompass.temperature` before `mountingOffset`, so it
+  propagates to both heading outputs. Coefficients are NVS-backed
+  (`Preferences` namespace `"thermalcomp"`) with a new `GET/POST
+  /api/thermal/config` endpoint for field retuning without a reflash.
+  Backtested: reduces heading residual std from 3.50 deg to 2.08 deg (40.6%)
+  and removes the temperature correlation (r^2 0.647 → 0.0002) on the
+  analysis window; confirmed inert during the known WiFi-reconnect heading
+  artifact (temperature is flat during that event).
+- `README.md` § "OTA firmware updates" now documents the HALOS-relay flashing
+  procedure (SCP binary to HALOS, flash from there via `/home/pi/espota.py`)
+  needed when the dev machine is off the boat's local WiFi (e.g. connected
+  only via Tailscale) — discovered when this release's own OTA flash failed
+  from a Tailscale-only Mac.
+
+### Deployed
+- Flashed to the boat via the HALOS-relay procedure (dev machine had no
+  direct network path to `192.168.8.214`). Confirmed post-flash: new
+  `/api/thermal/config` endpoint live with correct coefficients, heading and
+  temperature still publishing normally. Monitoring the Grafana "eCompass
+  Thermal Drift" dashboard over the next few days to confirm the diurnal
+  correlation is gone in practice, not just in backtesting.
+
+---
+
 ## [1.3.1] - 2026-07-08
 
 ### Added
