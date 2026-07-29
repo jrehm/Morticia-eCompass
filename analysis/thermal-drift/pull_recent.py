@@ -58,7 +58,7 @@ def main():
     out_dir = Path(__file__).parent / "data"
     out_dir.mkdir(exist_ok=True)
 
-    client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+    client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=300_000)
     series = {}
     for sk_path, (col_name, convert) in PATHS.items():
         print(f"Fetching {sk_path} ...")
