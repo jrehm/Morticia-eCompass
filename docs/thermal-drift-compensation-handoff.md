@@ -10,6 +10,36 @@
 > the compiled formula against `analysis/thermal-drift/validate.py` before
 > FOTA — see the Formula section below. Still pending before flashing: a
 > live serial-monitor smoke test.
+>
+> **2026-07-29 update — deployed coefficient invalidated by sensor relocation.**
+> Analysis of a full 9-day dockside window (`analysis/thermal-drift/recent_correlation_summary.md`)
+> found the deployed `-1.0211 deg/C` was substantially overcorrecting: the
+> post-correction residual still showed a strong (`r^2=0.67`) temperature
+> relationship of the *opposite* sign, and backing out the applied correction
+> put the sensor's actual current thermal sensitivity at only `-0.164 deg/C`
+> (`r^2=0.07`) — about 6x weaker than the original fit, with wind (`~-0.20
+> deg/kn`, stable across both the 3-day and 9-day windows) a more reliable
+> predictor than temperature at that point.
+>
+> Shortly after, the compass sensor was physically relocated — a second
+> BRKT-STBC-AGM01 mounted ~3ft from the SensESP enclosure/battery via a
+> twisted-pair I2C extension, out of the SensESP PCB's near-field entirely
+> (see ADR-013 in morticia-project `DECISIONS.md`). `magfit`/`magfittrial`
+> dropped from stuck-at-12% to under 3% immediately, consistent with the
+> original diagnosis that PCB-proximity noise (not distance-scaled onboard
+> DC wiring) was the dominant disturbance. This also means the `-1.0211
+> deg/C` fit — and the `-0.164 deg/C` re-check above — were both measured
+> against a sensor thermal environment (self-heating from an adjacent
+> ESP32/regulator/radio) that no longer exists at the new location. Treat
+> the deployed coefficient as invalid, not just stale.
+>
+> **Action taken:** `slope_deg_per_c` reset to `0` via `POST
+> /api/thermal/config` on 2026-07-29. Plan: collect several days of dockside
+> data at the new sensor location, rerun the `analysis/thermal-drift/`
+> pipeline against it, and only then decide whether a nonzero coefficient is
+> warranted — the lower noise floor at the new location should also make
+> this fit meaningfully cleaner (higher r^2, less wind confound) than either
+> prior attempt, if a real thermal effect is present at all.
 
 ## Purpose
 
