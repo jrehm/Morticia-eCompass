@@ -40,6 +40,26 @@
 > warranted — the lower noise floor at the new location should also make
 > this fit meaningfully cleaner (higher r^2, less wind confound) than either
 > prior attempt, if a real thermal effect is present at all.
+>
+> **2026-08-01 update — new coefficient deployed at the new location.** Two
+> days of dockside data (7/30 13:00 UTC -> 8/1, 32,884 samples, temp 23-37C)
+> gave `slope = -0.1695 deg/C, r^2 = 0.39` — a real, moderately strong
+> relationship (vs. r^2=0.07 for the 9-day re-check that had to back the old
+> correction out of PCB-noise-contaminated data). Wind-controlled regression
+> barely moved the temp coefficient despite high temp/wind collinearity
+> (r=0.75), consistent with the boat being dockside with only line-stretch
+> movement during this window — a cleaner test than the prior windows. This
+> also converges closely with the -0.164 deg/C estimate from the old
+> location's 9-day re-check, which is a good independent cross-check that
+> both that number and the `slope_deg_per_c=0` reset (see above) actually
+> took effect. Full writeup: `analysis/thermal-drift/newloc_correlation_summary.md`.
+>
+> Deployed `slope_deg_per_c=-0.17, tref_c=30.4` via `POST /api/thermal/config`,
+> 2026-08-01 07:00 local. Treated as provisional, not final — r^2=0.39 still
+> leaves the majority of heading variance unexplained by temperature alone,
+> and 2 days dockside is a thin sample vs. the original 5-day fit. Plan to
+> monitor Grafana over the next several days and an actual sail before
+> treating this as settled.
 
 ## Purpose
 
