@@ -17,6 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.4] - 2026-08-01
+
+### Changed
+- Bumped `SignalK/SensESP` dependency from 3.4.0 to 3.5.0. Notably fixes the
+  `SKWSClient` retry loop getting stuck in Authorizing/Connecting state after
+  a Signal K server restart — the failure mode `SK_CONNECTION_TIMEOUT_MS` in
+  `main.cpp` was added to route around via a forced reboot. Also makes delta
+  send and WebSocket teardown non-blocking, and makes the WS buffer size
+  configurable with oversize-delta dropping (plausibly related to the
+  "Send buffer overflow" client disconnects observed 2026-07-13). The
+  connectivity watchdog is left in place as a safety net; not removed by this
+  change.
+- Local `get_http_server()` patch (see README "Local SensESP Patches")
+  reapplied against 3.5.0 — confirmed the insertion point
+  (after `get_sk_delta()`) and `http_server_` are unchanged from 3.4.0.
+
+### Note
+- Behavior change upstream: SensESP's WebSocket client now subscribes with
+  `sendMeta=all` by default, slightly increasing metadata traffic on
+  (re)connect. Not expected to matter at this data volume, worth knowing
+  given the boat's WAN flakiness.
+
+---
+
 ## [1.3.3] - 2026-08-01
 
 ### Fixed
