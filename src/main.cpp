@@ -162,10 +162,14 @@ static float g_battery_seed_ah     = INA_BATTERY_NOMINAL_AH;  // Ah remaining at
 
 // NVS-backed thermal compensation coefficients — updated via POST
 // /api/thermal/config. Compile-time defaults are the fit from the
-// 2026-07-13 analysis (analysis/thermal-drift/ in morticia-project,
-// -1.021 deg/C, T_ref 30.07 C); see docs/thermal-drift-compensation-handoff.md.
-static constexpr float kThermalSlopeRadPerKDefault = -0.017822f;
-static constexpr float kThermalRefTempKDefault = 303.222f;
+// 2026-07-30/8-01 new-location analysis (analysis/thermal-drift/
+// newloc_correlation_summary.md in Morticia-eCompass, -0.17 deg/C, T_ref
+// 30.4 C; deployed live via the API on 2026-08-01), which superseded the
+// original 2026-07-13 dockside fit (-1.021 deg/C, T_ref 30.07 C) once the
+// sensor was relocated ~3ft from the SensESP PCB (ADR-013 in
+// morticia-project). See docs/thermal-drift-compensation-handoff.md.
+static constexpr float kThermalSlopeRadPerKDefault = -0.0029671f;
+static constexpr float kThermalRefTempKDefault = 303.55f;
 static float g_thermal_slope_rad_per_k = kThermalSlopeRadPerKDefault;
 static float g_thermal_ref_temp_k = kThermalRefTempKDefault;
 

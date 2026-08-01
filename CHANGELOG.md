@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reduced from 10000ms to 1000ms to match (same ~5x margin ratio as before).
 - Net effect: `headingCompass`/`headingMagnetic` now emit at up to 5Hz
   instead of 0.25Hz, comfortably above the requested 2Hz floor.
+- Compile-time thermal-compensation defaults (`kThermalSlopeRadPerKDefault`,
+  `kThermalRefTempKDefault`) updated to match the coefficient actually
+  deployed on 2026-08-01 (`-0.17 deg/C`, `T_ref 30.4 C`, from the
+  new-location analysis in `analysis/thermal-drift/newloc_correlation_summary.md`),
+  superseding the stale `-1.021 deg/C`/`30.07 C` fit from the old
+  PCB-adjacent sensor location. These are only used as a first-boot/NVS-
+  erased fallback (the live value lives in NVS via `/api/thermal/config`),
+  but leaving them at the old, now-invalid values would have been a quiet
+  trap for a future factory reset or replacement device.
 
 ---
 
