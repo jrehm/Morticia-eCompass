@@ -60,6 +60,24 @@
 > and 2 days dockside is a thin sample vs. the original 5-day fit. Plan to
 > monitor Grafana over the next several days and an actual sail before
 > treating this as settled.
+>
+> **2026-08-01 update — headingCompass/headingMagnetic rate fixed, 0.25Hz -> 5Hz.**
+> The thermal-compensation `Zip` added in v1.3.2 only emits once both its
+> inputs (heading, temperature) have produced a fresh value since the last
+> emission, so the corrected heading was capped at temperature's reporting
+> rate (`CALIBRATION_REPORTING_INTERVAL_MS`, 4000ms/0.25Hz) even though raw
+> fusion heading is ready at 10Hz — an unintended side effect of reusing that
+> constant, not a deliberate design choice, and it was causing skipped/gapped
+> values in InfluxDB. Fixed in v1.3.3 (targeting; not yet flashed) by giving
+> temperature a second, dedicated, faster producer (`temperature_fast`,
+> `THERMAL_ZIP_INTERVAL_MS`=200ms/5Hz) feeding only the Zip, decoupled from
+> the diagnostic-reporting-rate `temperature` producer that still feeds
+> `environment.inside.ecompass.temperature`/magfit/magsolver at the original
+> 0.25Hz (harmless — temperature's thermal time constant is minutes, not
+> milliseconds). `Zip`'s `max_age` reduced from 10000ms to 1000ms to match
+> (same ~5x margin ratio as before). Compiles clean (`pio run -e shesp32`).
+> Still pending: OTA flash and a live check that `headingCompass` actually
+> reports at ~5Hz post-flash.
 
 ## Purpose
 

@@ -89,6 +89,12 @@
 #define CALIBRATION_REPORTING_INTERVAL_MS (4000)
 #define RATE_REPORTING_INTERVAL_MS        (200)
 #define POWER_REPORTING_INTERVAL_MS       (1000)
+// Dedicated, faster temperature feed for the thermal-compensation Zip only
+// (see COMPASS HEADING section below) -- decoupled from
+// CALIBRATION_REPORTING_INTERVAL_MS so headingCompass/headingMagnetic aren't
+// throttled down to the (deliberately slow) magfit/magsolver diagnostic
+// rate. 200ms = 5Hz, comfortably above the requested 2Hz floor.
+#define THERMAL_ZIP_INTERVAL_MS           (200)
 
 // Power monitoring I2C addresses
 // Solar: INA226 at default address (A0, A1 floating)
@@ -332,6 +338,18 @@ void setup() {
       kSKPathTemperature, kConfigPathNone, temperature_metadata);
   temperature->connect_to(temperature_output);
 
+  // Separate, faster-reporting temperature feed used ONLY to drive the
+  // thermal-compensation Zip below (see COMPASS HEADING). Temperature has
+  // a minutes-long thermal time constant, so polling it 20x more often
+  // costs nothing physically -- but it lets the corrected heading emit at
+  // THERMAL_ZIP_INTERVAL_MS instead of being capped at the much slower
+  // CALIBRATION_REPORTING_INTERVAL_MS used for magfit/magsolver
+  // diagnostics. `environment.inside.ecompass.temperature` above is
+  // unaffected and keeps reporting at its original (slower) rate.
+  auto temperature_fast = std::make_shared<RepeatSensor<float>>(
+      THERMAL_ZIP_INTERVAL_MS,
+      [sensor_temperature]() { return sensor_temperature->ReportValue(); });
+
   // ========== COMPASS HEADING ==========
   auto* sensor_heading = new OrientationValues(
       orientation_sensor, OrientationValues::kCompassHeading);
@@ -344,11 +362,18 @@ void setup() {
   // into a tuple (Zip), then applies a linear correction fitted against
   // 5 days of dockside data (-1.021 deg/C, no lag, no hysteresis, so a
   // simple linear fit is sufficient — no lookup table needed).
-  // max_age=10000ms: temperature reports every CALIBRATION_REPORTING_INTERVAL_MS
-  // (4000ms), so 10s gives comfortable margin without masking a real sensor stall.
-  auto* thermal_zip = new Zip<float, float>(10000);
+  // max_age=1000ms: temperature_fast reports every THERMAL_ZIP_INTERVAL_MS
+  // (200ms), so 1s gives ~5x margin without masking a real sensor stall.
+  // Zip only emits once BOTH inputs have produced a fresh value since the
+  // last emission, so the output rate is capped by the slower of the two —
+  // previously that was `temperature` at CALIBRATION_REPORTING_INTERVAL_MS
+  // (4000ms/0.25Hz), throttling headingCompass/headingMagnetic down to
+  // 0.25Hz even though heading itself is ready at 10Hz. Using
+  // `temperature_fast` here instead raises that ceiling to
+  // THERMAL_ZIP_INTERVAL_MS (200ms/5Hz).
+  auto* thermal_zip = new Zip<float, float>(1000);
   compass_heading->connect_to(std::get<0>(thermal_zip->consumers));
-  temperature->connect_to(std::get<1>(thermal_zip->consumers));
+  temperature_fast->connect_to(std::get<1>(thermal_zip->consumers));
 
   auto thermal_compensation = std::make_shared<
       LambdaTransform<std::tuple<float, float>, float>>(

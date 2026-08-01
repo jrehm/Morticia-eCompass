@@ -17,6 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.3.3] - 2026-08-01
+
+### Fixed
+- `navigation.headingCompass` / `navigation.headingMagnetic` were unintentionally
+  throttled to 0.25Hz (`CALIBRATION_REPORTING_INTERVAL_MS`). The thermal
+  compensation `Zip` (added in 1.3.2) combines heading and temperature into a
+  tuple, and only emits once *both* inputs have produced a fresh value since
+  the last emission — so even though the raw fusion heading is ready at 10Hz
+  (`ORIENTATION_REPORTING_INTERVAL_MS`), the combined/corrected output could
+  never emit faster than its slower input, temperature, which was reused from
+  the (deliberately slow) magfit/magsolver diagnostic reporting interval.
+  This was causing skipped/gapped values in InfluxDB history.
+- Added a new `THERMAL_ZIP_INTERVAL_MS` (200ms/5Hz) constant and a dedicated
+  `temperature_fast` producer used only to drive the thermal-compensation
+  `Zip`. `environment.inside.ecompass.temperature` and the magfit/magsolver
+  diagnostics are unaffected and keep reporting at the original 0.25Hz —
+  temperature has a minutes-long thermal time constant, so polling it 20x
+  more often for the Zip alone costs nothing physically. `Zip`'s `max_age`
+  reduced from 10000ms to 1000ms to match (same ~5x margin ratio as before).
+- Net effect: `headingCompass`/`headingMagnetic` now emit at up to 5Hz
+  instead of 0.25Hz, comfortably above the requested 2Hz floor.
+
+---
+
 ## [1.3.2] - 2026-07-13
 
 ### Added
