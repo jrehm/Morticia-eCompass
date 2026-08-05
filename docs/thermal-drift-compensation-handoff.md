@@ -87,6 +87,14 @@ v1.2.2 specifically as diagnostic groundwork for this — "no compensation logic
 intended to correlate against heading/attitude drift to characterize thermal drift
 magnitude before deciding on a fix." This document is that decision.
 
+**Scope note:** the analysis here (`analysis/thermal-drift/`) is the *firmware
+calibration derivation* — fitting and validating the deployed coefficient from
+raw sensor data. For a *system-level, post-deployment* check of whether a
+residual heading/temperature relationship remains once the correction is live
+(deconfounded against wind/sea-breeze effects), see
+`morticia-project/analysis/heading-drift/` in the
+[morticia-project](https://github.com/jrehm/morticia-project) repo.
+
 ---
 
 ## Evidence
