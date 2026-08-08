@@ -17,7 +17,7 @@ trimaran "Morticia", reporting to Signal K via WiFi.
 
 **Network**
 - Primary: HALPI2 running Signal K at `halos.local:3000` (192.168.8.211)
-- Backup: OpenPlotter Raspberry Pi 4 at `openplotter.local:3000` (192.168.8.212)
+- Backup: RPi4 running HALOS, Signal K at `rpi4.lan:3000` (192.168.8.212)
 - ESP32 web UI: `http://sensesp.local` (192.168.8.214)
 
 ## Wiring
