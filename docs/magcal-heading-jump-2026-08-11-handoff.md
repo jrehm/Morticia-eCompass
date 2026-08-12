@@ -9,6 +9,30 @@
 > 2026-08-12 early morning); see the "2026-08-12 morning update" section at
 > the end for what changed since.
 
+## Related work
+
+This shares the same underlying magnetic-calibration subsystem as the
+compass **deviation table** investigation (`analysis/calibration/`,
+narrative in `morticia-project/handoffs/heading-deviation-table-
+investigation.md`), which was in progress in parallel and found a large
+(~70° peak-to-peak) heading-locked deviation swing while motoring,
+tentatively attributed to the outboard's hard-iron effect on the compass
+depending on its position (down/aft while motoring vs. up/forward while
+sailing — the position the original `magfit` used).
+
+The three diagnostics added here are being put to direct use in that
+investigation's next step: an engine down/running vs. up/off test planned
+for 2026-08-13, logging `magfieldmagnitude`/`maginclination` alongside
+heading as a more direct, non-GPS-based signature of whether the engine
+introduces a real magnetic disturbance — and checking
+`lastcaleventfitdeltapct`/`lastcaleventheadingdeltadeg` before/after that
+test window to rule out an unrelated auto-recalibration event
+contaminating the result. See `morticia-project/TODO.md` → "Compass
+Deviation Correction Table" and "Related: Magnetic Calibration
+Auto-Recalibration" for the live task tracking on both threads.
+
+---
+
 ## Purpose
 
 On 2026-08-11 around noon, while moored, `navigation.headingCompass`
