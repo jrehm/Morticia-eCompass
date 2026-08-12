@@ -241,7 +241,11 @@ This project requires one patch to the local SensESP library copy.
 It is lost on `pio run --target clean` or any library upgrade and
 **must be reapplied manually** before the project will compile.
 
-**File: `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`**
+**Files (apply to BOTH — `shesp32` and `shesp32_ota` are separate
+PlatformIO envs with independent `.pio/libdeps/` copies of SensESP):**
+- `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`
+- `.pio/libdeps/shesp32_ota/SensESP/src/sensesp_app.h`
+
 Add with the other public getters (after `get_sk_delta()`):
 ```cpp
 // LOCAL PATCH — expose HTTP server for custom endpoints.
@@ -252,6 +256,10 @@ SensESP 3.3.x/3.4.x keep `http_server_` protected with no public accessor
 (confirmed still true as of 3.4.0). This one-line patch restores access so
 `/api/battery/set-full` and `/api/calibration/save-mag` can be registered on
 the primary HTTP server.
+
+(Learned the hard way 2026-08-12: patching only `shesp32/` and forgetting
+`shesp32_ota/` compiles fine for USB builds but fails OTA uploads with
+`'get_http_server' ... not accessible from this context`.)
 
 ## Known Upgrade Issues
 

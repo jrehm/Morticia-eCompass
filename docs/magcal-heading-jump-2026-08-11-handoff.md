@@ -1,11 +1,13 @@
 # Morticia eCompass — 2026-08-11 Heading Jump Investigation Handoff
 
-> **STATUS: investigation + partial fix landed, uncommitted.** Written to
-> resume the session that ran 2026-08-11 evening into 2026-08-12 early
-> morning. Code changes are sitting in the working tree (`git status` shows
-> `CHANGELOG.md` and `src/main.cpp` modified) — not committed, not flashed.
-> Current firmware on the boat is still whatever was running before this
-> session (pre-restart baseline, i.e. does NOT have tonight's diagnostics).
+> **STATUS: items 1–2 committed and flashed to the boat (2026-08-12).**
+> Committed as `34ff178` / firmware `v1.4.0`, OTA-flashed to `sensesp.local`
+> and confirmed live in Signal K/InfluxDB. Item 3 (gating the continuous
+> auto-recalibration) is still open — see "What's left" below.
+>
+> Original write-up below is left as-authored (2026-08-11 evening →
+> 2026-08-12 early morning); see the "2026-08-12 morning update" section at
+> the end for what changed since.
 
 ## Purpose
 
@@ -207,3 +209,54 @@ below).
   incident) is at `analysis/calibration/sailing_20260810_153000_to_
   20260810_171000.csv` for reference — don't confuse with this
   investigation's InfluxDB-sourced data, which wasn't exported to a file.
+
+---
+
+## 2026-08-12 morning update
+
+Checked heading ~10h after the restart test (01:39 → 11:31 UTC): it never
+settled to a fixed value. It wandered in a ~196.4°–199.3° band, no clean
+convergence to the pre-noon ~199.5° baseline. However, `rateOfTurn` stddev
+stayed flat at the noise floor the whole time (no turning-event signature),
+and `magfit` climbed smoothly with the aging curve only (no discrete jump)
+— so this reads as ordinary mooring swing (tide/wind over several hours),
+not another calibration artifact. The magfit jump detector (item 2) would
+not have false-positived on this, which is the expected/correct behavior.
+
+Given that, proceeded with the user's picks: version bump, commit, flash.
+
+1. **Version bump:** `FIRMWARE_VERSION` → `1.4.0` in `platformio.ini`
+   (minor bump — purely additive, no breaking changes). `[Unreleased]`
+   CHANGELOG entry moved to `## [1.4.0] - 2026-08-12`.
+2. **Committed:** `34ff178` — "Add magnetic calibration diagnostics and
+   jump detector (v1.4.0)". Includes `CHANGELOG.md`, `platformio.ini`,
+   `src/main.cpp`, and this handoff doc.
+3. **Build:** `pio run -e shesp32` — SUCCESS, 91.1% flash / 16.9% RAM
+   (unchanged from last night's build, as expected for a version-string
+   change).
+4. **OTA flash:** `pio run -e shesp32_ota -t upload --upload-port
+   192.168.8.214` — **first attempt failed to compile**: the `shesp32_ota`
+   PlatformIO env has its own separate `.pio/libdeps/shesp32_ota/` copy of
+   SensESP, which had never had the local `get_http_server()` patch applied
+   (see README "Local SensESP Patches") — only the plain `shesp32` env's
+   libdeps copy had it. Reapplied the one-line patch to
+   `.pio/libdeps/shesp32_ota/SensESP/src/sensesp_app.h`, retried — SUCCESS
+   (101s). **Note for next upgrade/clean:** the patch now needs to be
+   reapplied to *both* `.pio/libdeps/shesp32/` and
+   `.pio/libdeps/shesp32_ota/` copies, since they're independent
+   directories. Worth a README update if this bites again.
+5. **Post-flash verification:** confirmed all three new SK paths
+   (`magfieldmagnitude` = 48.09 µT, `magfieldmagnitudetrial` = 0,
+   `maginclination` = 1.089 rad ≈ 62.4°) are live and publishing at the
+   expected 4s interval. Also confirmed `magfit` dropped from 3.228%
+   (aged, in-session) to 2.858% (persisted NVS calibration) across the
+   reboot — same NVS-reload behavior as last night's restart test. Unlike
+   last night, heading showed **no overshoot** this time (stayed steady at
+   ~198.1–198.2° straight through the reboot gap) — consistent with the
+   fusion filter already having converged before this flash, so there was
+   nothing to overshoot from.
+
+**Remaining open item:** #3 from the original mitigation menu (gate/disable
+the continuous 5-minute auto-recalibration) — still not started, still the
+biggest remaining piece of work. Two candidate approaches are described
+above under the original "What's left" section.
