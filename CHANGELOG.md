@@ -17,6 +17,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.0] - 2026-08-12
+
+### Added
+- Three previously-unpublished magnetic calibration diagnostics from
+  OrientationSensorFusion-ESP now reported to Signal K:
+  `orientation.calibration.magfieldmagnitude` /
+  `magfieldmagnitudetrial` (geomagnetic B, uT) and `maginclination`
+  (rad). Per the fusion library's own docs, comparing in-use vs. trial
+  B-field magnitude is the recommended way to tell a genuine magnetic
+  disturbance from an ordinary background recalibration.
+- Magnetic-calibration change detector: watches `magfit` for any
+  single-interval change too large to be the library's own ~1%/24h fit-error
+  aging, logs it (`ESP_LOGW`), and publishes the size of the most recent
+  event via `orientation.calibration.lastcaleventfitdeltapct` and
+  `lastcaleventheadingdeltadeg`. Motivated by a 2026-08-11 mooring incident
+  where the onboard auto-calibration solver (`fusion/magnetic.c`, which
+  re-solves from a rolling sample buffer every 5 min and ages out the
+  existing calibration specifically so a new one eventually wins) silently
+  shifted reported heading ~15° at a stationary dock — see analysis
+  discussion in project chat history. These two paths make that kind of
+  event visible in Grafana instead of looking like the boat swung.
+
+---
+
 ## [1.3.4] - 2026-08-01
 
 ### Changed

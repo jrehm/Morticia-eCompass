@@ -188,6 +188,22 @@ static float GetFullChargePassRatio() {
       : 0.0f;
 }
 
+// Magnetic-calibration change-detector state — file scope so both the
+// onRepeat() detector and its SignalK RepeatSensor outputs can share it.
+// The fusion library (OrientationSensorFusion-ESP, fusion/magnetic.c)
+// re-solves the magnetic calibration from a rolling sample buffer every
+// CAL_INTERVAL_SECS (5 min) and auto-adopts the result if its fit error
+// looks better than the current one -- and the current one's fit error is
+// deliberately "aged" upward (~1%/24h) so a stale calibration eventually
+// loses to a fresh one even without any real change. At a mooring, hours on
+// one heading means that rolling buffer is a narrow cluster of near-
+// identical orientations, which can produce a numerically better fit that
+// isn't actually more correct -- shifting the reported heading by double
+// digits of degrees with no signal beyond the raw magfit telemetry. These
+// hold the size of the most recent such event until the next one occurs.
+static float g_magcal_event_fitdelta_pct = 0.0f;
+static float g_magcal_event_headingdelta_deg = 0.0f;
+
 // Deviation Table - enter via web UI or hard-code after compass swing
 class DeviationInterpolator : public CurveInterpolator {
  public:
@@ -305,6 +321,11 @@ void setup() {
   const char* kSKPathMagFitTrial     = "orientation.calibration.magfittrial";
   const char* kSKPathMagSolver       = "orientation.calibration.magsolver";
   const char* kSKPathMagNoise        = "orientation.calibration.magnoise";
+  const char* kSKPathMagFieldMag      = "orientation.calibration.magfieldmagnitude";
+  const char* kSKPathMagFieldMagTrial = "orientation.calibration.magfieldmagnitudetrial";
+  const char* kSKPathMagInclination   = "orientation.calibration.maginclination";
+  const char* kSKPathMagCalEventFit      = "orientation.calibration.lastcaleventfitdeltapct";
+  const char* kSKPathMagCalEventHeading  = "orientation.calibration.lastcaleventheadingdeltadeg";
   const char* kSKPathTemperature     = "environment.inside.ecompass.temperature";
   const char* kConfigPathNone = "";
 
@@ -574,6 +595,122 @@ void setup() {
   auto mag_noise_output = std::make_shared<SKOutput<float>>(
       kSKPathMagNoise, "", mag_noise_metadata);
   magnoise->connect_to(mag_noise_output);
+
+  // Geomagnetic field magnitude (uT) of the calibration currently in use,
+  // and of the current (trial) readings. Per the fusion library's own docs
+  // (OrientationSensorFusion-ESP wiki: Magnetic-Calibration), comparing
+  // these two is the recommended way to tell a genuine magnetic disturbance
+  // (B changes) from an ordinary periodic recalibration on stationary data
+  // (B stays put but the fit is re-solved anyway).
+  auto* sensor_magfield = new OrientationValues(
+      orientation_sensor, OrientationValues::kMagFieldMagnitude);
+  auto magfield = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      [sensor_magfield]() { return sensor_magfield->ReportValue(); });
+  auto magfield_metadata = std::make_shared<SKMetadata>();
+  magfield_metadata->units_ = "uT";
+  magfield_metadata->description_ = "Geomagnetic field magnitude of the calibration currently in use";
+  magfield_metadata->display_name_ = "Mag Field B";
+  magfield_metadata->short_name_ = "MagB";
+  auto magfield_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagFieldMag, kConfigPathNone, magfield_metadata);
+  magfield->connect_to(magfield_output);
+
+  auto* sensor_magfield_trial = new OrientationValues(
+      orientation_sensor, OrientationValues::kMagFieldMagnitudeTrial);
+  auto magfieldtrial = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      [sensor_magfield_trial]() { return sensor_magfield_trial->ReportValue(); });
+  auto magfieldtrial_metadata = std::make_shared<SKMetadata>();
+  magfieldtrial_metadata->units_ = "uT";
+  magfieldtrial_metadata->description_ = "Geomagnetic field magnitude from current (trial) readings";
+  magfieldtrial_metadata->display_name_ = "Mag Field B Trial";
+  magfieldtrial_metadata->short_name_ = "MagBTrial";
+  auto magfieldtrial_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagFieldMagTrial, kConfigPathNone, magfieldtrial_metadata);
+  magfieldtrial->connect_to(magfieldtrial_output);
+
+  // Geomagnetic inclination (rad) -- another interference indicator per the
+  // fusion library docs: a swing of >~10 deg from recent values indicates a
+  // magnetic disturbance rather than an ordinary recalibration.
+  auto* sensor_maginclination = new OrientationValues(
+      orientation_sensor, OrientationValues::kMagInclination);
+  auto maginclination = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      [sensor_maginclination]() { return sensor_maginclination->ReportValue(); });
+  auto maginclination_metadata = std::make_shared<SKMetadata>();
+  maginclination_metadata->units_ = "rad";
+  maginclination_metadata->description_ = "Geomagnetic field inclination from horizontal";
+  maginclination_metadata->display_name_ = "Mag Inclination";
+  maginclination_metadata->short_name_ = "MagIncl";
+  auto maginclination_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagInclination, kConfigPathNone, maginclination_metadata);
+  maginclination->connect_to(maginclination_output);
+
+  // ========== MAG CAL CHANGE DETECTOR ==========
+  // Watches magfit (the in-use fit error) for any single-interval change
+  // bigger than the library's own aging drift can explain. Aging adds
+  // ~1%/24h (FITERRORAGINGSECS in magnetic.c), which works out to a few
+  // thousandths of a percent per CALIBRATION_REPORTING_INTERVAL_MS tick --
+  // so any change past kMagCalJumpThresholdPct can only be a fresh
+  // calibration-acceptance event, not aging noise. When one fires, this
+  // records how big the fit change was and how many degrees the reported
+  // heading moved as a result, so a silent recalibration shows up in
+  // Grafana instead of just looking like the boat swung.
+  const float kMagCalJumpThresholdPct = 0.01f;
+  event_loop()->onRepeat(CALIBRATION_REPORTING_INTERVAL_MS,
+      [sensor_magcalfit, sensor_heading, kMagCalJumpThresholdPct]() {
+        static float last_fit = -1.0f;
+        static float last_heading_deg = NAN;
+
+        float fit = sensor_magcalfit->ReportValue();
+        float heading_deg = sensor_heading->ReportValue() * (180.0f / PI);
+
+        // Skip the first sample (nothing to compare yet) and the fusion
+        // library's startup sentinel (0 = insufficient data for a fit).
+        if (last_fit >= 0.0f && fit > 0.0f) {
+          float fit_delta = fit - last_fit;
+          if (fabsf(fit_delta) > kMagCalJumpThresholdPct) {
+            float heading_delta = heading_deg - last_heading_deg;
+            while (heading_delta > 180.0f) heading_delta -= 360.0f;
+            while (heading_delta < -180.0f) heading_delta += 360.0f;
+            g_magcal_event_fitdelta_pct = fit_delta;
+            g_magcal_event_headingdelta_deg = heading_delta;
+            ESP_LOGW("eCompass",
+                "Magnetic calibration changed: fit %.3f%% -> %.3f%% (%+.3f%%), "
+                "heading shifted %+.1f deg",
+                last_fit, fit, fit_delta, heading_delta);
+          }
+        }
+        last_fit = fit;
+        last_heading_deg = heading_deg;
+      });
+
+  auto magcal_event_fitdelta = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      []() { return g_magcal_event_fitdelta_pct; });
+  auto magcal_event_fitdelta_metadata = std::make_shared<SKMetadata>();
+  magcal_event_fitdelta_metadata->units_ = "%";
+  magcal_event_fitdelta_metadata->description_ =
+      "Fit-error change of the most recent auto-accepted magnetic calibration event (holds until the next event)";
+  magcal_event_fitdelta_metadata->display_name_ = "Last MagCal Event Fit Delta";
+  magcal_event_fitdelta_metadata->short_name_ = "MagCalEvtFit";
+  auto magcal_event_fitdelta_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagCalEventFit, kConfigPathNone, magcal_event_fitdelta_metadata);
+  magcal_event_fitdelta->connect_to(magcal_event_fitdelta_output);
+
+  auto magcal_event_headingdelta = std::make_shared<RepeatSensor<float>>(
+      CALIBRATION_REPORTING_INTERVAL_MS,
+      []() { return g_magcal_event_headingdelta_deg; });
+  auto magcal_event_headingdelta_metadata = std::make_shared<SKMetadata>();
+  magcal_event_headingdelta_metadata->units_ = "deg";
+  magcal_event_headingdelta_metadata->description_ =
+      "Approximate heading shift caused by the most recent auto-accepted magnetic calibration event (holds until the next event)";
+  magcal_event_headingdelta_metadata->display_name_ = "Last MagCal Event Heading Delta";
+  magcal_event_headingdelta_metadata->short_name_ = "MagCalEvtHdg";
+  auto magcal_event_headingdelta_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagCalEventHeading, kConfigPathNone, magcal_event_headingdelta_metadata);
+  magcal_event_headingdelta->connect_to(magcal_event_headingdelta_output);
 
   // ========== MAG CAL SAVE BUTTON ==========
   auto* button_watcher = new DigitalInputChange(
