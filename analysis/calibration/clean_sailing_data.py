@@ -19,8 +19,9 @@ a same-session, uncontrolled comparison point against the 2026-08-10
 motoring curve, not a replacement for the planned (but not yet completed)
 controlled engine-toggle test.
 
-Reads sailing_20260812_174500_to_20260812_201500.csv from this directory.
-Writes data/clean_sailing.csv + sailing_data_quality_summary.md.
+Reads the highest-resolution sailing_20260812_*.csv in this directory
+(prefers the "-1hz" export over the original 10s quick-look export, if
+both are present). Writes data/clean_sailing.csv + sailing_data_quality_summary.md.
 """
 
 import warnings
@@ -36,10 +37,12 @@ DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
 RAW_CSV = BASE_DIR / "sailing_20260812_174500_to_20260812_201500.csv"
+RAW_CSV_1HZ = BASE_DIR / "sailing_20260812_174500_to_20260812_201500-1hz.csv"
 
-ROLL_WINDOW = "21s"           # time-based -- robust to this file's 10s cadence
+ROLL_WINDOW = "21s"           # time-based -- robust to whichever cadence is loaded
 STEADY_STD_THRESHOLD_DEG = 3.0
 MIN_SOG_KN = 1.0
+BOUNDARY_BUFFER_S = 30         # exclude rows this close to a segment transition
 
 SEGMENTS = [
     ("pre_underway", "2026-08-12 17:45:00", "2026-08-12 18:00:00", "off_dock"),
@@ -66,8 +69,9 @@ def circular_diff_deg(a_deg: pd.Series, b_deg: pd.Series) -> pd.Series:
 
 
 def load_raw() -> pd.DataFrame:
-    df = pd.read_csv(RAW_CSV, parse_dates=["timestamp"])
-    return df.set_index("timestamp").sort_index()
+    path = RAW_CSV_1HZ if RAW_CSV_1HZ.exists() else RAW_CSV
+    df = pd.read_csv(path, parse_dates=["timestamp"])
+    return df.set_index("timestamp").sort_index(), path
 
 
 def tag_segments(df: pd.DataFrame) -> pd.DataFrame:
@@ -81,15 +85,40 @@ def tag_segments(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def flag_near_boundary(df: pd.DataFrame, buffer_s: int) -> pd.Series:
+    """True for rows within buffer_s of any segment transition -- transition
+    moments (e.g. engine shutting off, sails going up) are physically messy
+    and not representative of steady motoring or sailing."""
+    boundaries = pd.to_datetime([b for _, start, end, _ in SEGMENTS for b in (start, end)])
+    near = pd.Series(False, index=df.index)
+    for b in boundaries:
+        near |= (df.index >= b - pd.Timedelta(seconds=buffer_s)) & \
+                (df.index <= b + pd.Timedelta(seconds=buffer_s))
+    return near
+
+
+def flag_frozen_cog(df: pd.DataFrame) -> pd.Series:
+    """True where COGt and SOG are bit-identical to the previous sample while
+    LAT/LON keep moving -- found during development: a real GPS fix (position
+    updating normally) with a stale/frozen COG-SOG output, worst during active
+    turns (e.g. mark roundings), which fabricates large spurious deviation
+    since heading keeps changing while the "reference" doesn't."""
+    return (df["COGt"].diff() == 0) & (df["SOG"].diff() == 0)
+
+
 def main():
-    df = load_raw()
+    df, raw_path = load_raw()
     df = tag_segments(df)
 
     n_raw = len(df)
     sample_interval_s = df.index.to_series().diff().dt.total_seconds().median()
 
     # Calibration-event / stability check across the whole session
-    n_cal_events = int((df["MCALF"] != 0).sum())
+    # NOTE: MCALF/MFIT etc. only publish every ~4s (firmware reporting
+    # interval); at 1Hz cadence most rows are NaN for these fields, not 0.
+    # `!= 0` on a NaN is True in pandas, so this must exclude NaN explicitly
+    # or every missing sample gets miscounted as an event.
+    n_cal_events = int((df["MCALF"].notna() & (df["MCALF"] != 0)).sum())
     mfit_min, mfit_max = df["MFIT"].min(), df["MFIT"].max()
 
     # Per-segment summary (SOG, roll/pitch, inclination, magfit)
@@ -106,7 +135,14 @@ def main():
 
     # Steady-state filter, sailing (engine up/forward) rows only
     df["hdg_rollstd"] = circular_rolling_std_deg(df["HDGt"], ROLL_WINDOW)
-    sailing = df[df["engine_state"] == "off"].copy()
+    df["near_boundary"] = flag_near_boundary(df, BOUNDARY_BUFFER_S)
+    df["frozen_cog"] = flag_frozen_cog(df)
+    n_hdgt_missing = int(df["HDGt"].isna().sum())
+    n_frozen_cog = int(df["frozen_cog"].sum())
+    sailing = df[
+        (df["engine_state"] == "off") & df["HDGt"].notna() & df["COGt"].notna()
+        & ~df["near_boundary"] & ~df["frozen_cog"]
+    ].copy()
     steady = sailing[
         (sailing["hdg_rollstd"] < STEADY_STD_THRESHOLD_DEG) & (sailing["SOG"] >= MIN_SOG_KN)
     ].copy()
@@ -128,7 +164,7 @@ def main():
     lines = [
         "# Sailing-Configuration Deviation Diagnostic — Data Quality Summary",
         "",
-        f"Source: `{RAW_CSV.name}`",
+        f"Source: `{raw_path.name}`",
         f"Window: {df.index.min()} -> {df.index.max()} "
         f"({n_raw} rows @ ~{sample_interval_s:.0f}s)",
         "",
@@ -146,7 +182,19 @@ def main():
         "",
         "## Steady-state filter (sailing/engine-up rows only)",
         f"Circular rolling std of `HDGt` over {ROLL_WINDOW} < {STEADY_STD_THRESHOLD_DEG} deg, "
-        f"and SOG >= {MIN_SOG_KN} kn.",
+        f"and SOG >= {MIN_SOG_KN} kn. `HDGt` missing on {n_hdgt_missing} of {n_raw} rows "
+        f"({n_hdgt_missing / n_raw:.1%}) session-wide, dropped before filtering. Rows within "
+        f"{BOUNDARY_BUFFER_S}s of any segment transition are also excluded -- a 3-sample "
+        "SOG/COG glitch (6-22 kn in 2s, dev_deg to -133) turned up right at the "
+        "motor-out->presail boundary during development; excluding transition windows "
+        "removes it on principled grounds (transitions are physically messy generally) "
+        "rather than an ad hoc outlier rule.",
+        "",
+        f"**Frozen-COG filter:** {n_frozen_cog} of {n_raw} rows ({n_frozen_cog / n_raw:.1%}) "
+        "session-wide have `COGt`/`SOG` bit-identical to the previous sample while `LAT`/`LON` "
+        "keep updating normally -- a real GPS fix with a stale COG/SOG output, worst during "
+        "active turns (heading sweeping through 5+ deg while COGt sits frozen), which "
+        "fabricates large spurious deviation. Excluded from the steady-state set.",
         f"- Sailing rows (presail+race+postfinish): {len(sailing)}",
         f"- Steady-state rows retained: {len(steady)} of {len(sailing)} "
         f"({len(steady) / len(sailing):.1%})",

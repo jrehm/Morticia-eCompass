@@ -67,6 +67,9 @@ def fit_with_twa(heading_deg: np.ndarray, twa_deg: np.ndarray, dev_deg: np.ndarr
 
 def main():
     sail = load_clean_sailing()
+    n_before_twa_drop = len(sail)
+    sail = sail.dropna(subset=["TWA"]).copy()  # TWA publishes less often than HDGt/COGt
+    n_twa_dropped = n_before_twa_drop - len(sail)
     heading = sail["HDGt"].to_numpy()
     dev = sail["dev_deg"].to_numpy()
     twa = sail["TWA"].to_numpy()
