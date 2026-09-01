@@ -81,6 +81,18 @@ daytime pattern.** The original correlation in the 24-hour hourly-mean view was 
 a coincidental diurnal-shape overlap (both curves happen to rise-then-fall across a day)
 rather than a causal link. The actual driver remains unidentified — see Open Questions.
 
+**Also ruled out on physical grounds: the sun directly disturbing the ambient magnetic
+field.** `magfieldmagnitude` reads ~48.09 uT at this location. The sun's actual known
+effects on Earth's field are the Sq (solar-quiet) daily ionospheric-current variation
+(~20-30 nT peak-to-peak at mid-latitudes, ~0.05% of the ambient field) and geomagnetic
+storms (irregular, solar-wind-driven, ~500-1000 nT / ~1-2% even for a strong one, tracked via
+the Kp index). Both are one to three orders of magnitude too small to move `magnoise` from
+its ~0.00025 baseline to the observed ~0.008 peak (~30x), and a cheap AHRS-grade
+magnetometer's own noise floor would bury the Sq signal entirely. Storms are also episodic,
+not a reliable "every sunny afternoon" clock, whereas the observed pattern tracks local solar
+time reliably day after day -- the wrong recurrence shape for space weather. Whatever drives
+this is local to the boat/marina, not the sun's magnetic field itself.
+
 ## `magfit` (actual calibration quality) is a separate, slower-moving signal
 
 Around the 08-26 race, `magfit` did not jump with the `magnoise` spike, and no
