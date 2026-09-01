@@ -47,26 +47,39 @@ slow-decaying memory — a disturbance during a sail keeps showing as "elevated"
 the boat is calm again. Relevant if this is ever used as a live/alerting health check: don't
 expect a fast clear after a sail.
 
-### 2. Separate, at-rest daytime pattern — confounded solar/thermal
+### 2. Separate, at-rest daytime pattern — driver still unidentified (solar current and temperature both ruled out)
 
 On non-sailing days (e.g. 2026-08-31 -> 09-01, and to a lesser extent 08-28 -> 08-31),
 `magnoise` still climbs during daylight hours even though `navigation.speedOverGround`
 confirms the boat never left the dock (stayed at the ~0.05 kn GPS noise floor all day —
-moored in its usual current-free home berth). This at-rest rise tracks with:
+moored in its usual current-free home berth).
 
-- **Solar charge current** climbing from ~0 overnight to a ~1.5A midday peak.
-- **eCompass internal temperature** climbing from ~24°C overnight to ~40°C by late
-  afternoon (16°C swing).
+**Initial hypothesis (disconfirmed):** the 24-hour hourly-mean view showed `magnoise`
+tracking `electrical.solar.current` (~0 overnight to ~1.5A midday peak) and
+`environment.inside.ecompass.temperature` (~24°C overnight to ~40°C by late afternoon).
+Both looked plausible and were confounded with each other (both sun-driven), so two
+follow-up tests were run at finer resolution to separate them:
 
-Both are sun-exposure driven and therefore confounded with each other in this data — cannot
-yet separate "solar-controller EMI reaching the magnetometer" from "sensor self-heating"
-without a targeted comparison (a cloudy/no-charge day, or physically shading the panel or
-the eCompass enclosure independently).
+**Test A — last-hour, fine resolution (2026-09-01, ~5-6PM EDT):** `magnoise` climbed
+smoothly from 0.00177 to 0.00326 (~1.8x) over one hour, while `electrical.solar.power` was
+flat-to-declining (5.5W -> 4.9W -> 5.8W -> 3.9W, no upward trend) and
+`environment.inside.ecompass.temperature` was essentially flat (~311.5K the whole hour).
+Roll variance stayed near-zero, confirming the boat was still moored. Neither candidate
+tracks the rise at this resolution.
 
-**Not yet done — next step to disambiguate:** compare a low-solar-output day (overcast, or
-panel manually covered) against a sunny day with similar ambient temperature. If `magnoise`
-still climbs with temperature alone (charge current flat/near-zero), that points to sensor
-self-heating rather than solar EMI.
+**Test B — clean overnight charger cycle, no sailing, no sun (2026-08-30 22:00 UTC ->
+2026-08-31 09:00 UTC):** the battery charger switched on at ~2AM EDT, `electrical.batteries.
+house.current` jumping from -1.2A (discharging) to +2.9A (charging) — a larger swing than
+the daytime solar current ever produces. `magnoise` did not respond at all: 0.00044 just
+before the jump, 0.00028-0.00035 during and after 3+ hours of steady charging. Confirmed by
+the boat owner independently: the charger also runs overnight with no associated `magnoise`
+change, which is what this test shows directly.
+
+**Conclusion: solar/charge current and sensor self-heating (as measured by
+`environment.inside.ecompass.temperature`) are both ruled out as drivers of the at-rest
+daytime pattern.** The original correlation in the 24-hour hourly-mean view was most likely
+a coincidental diurnal-shape overlap (both curves happen to rise-then-fall across a day)
+rather than a causal link. The actual driver remains unidentified — see Open Questions.
 
 ## `magfit` (actual calibration quality) is a separate, slower-moving signal
 
@@ -84,10 +97,10 @@ worth spot-checking periodically rather than treated as a fixed number.
 
 ## Reassurance
 
-Across the full week, elevated `magnoise` — whether from sailing dynamics or the daytime
-solar/thermal pattern — has not been observed to trigger a bad recalibration event
-(`lastcaleventfitdeltapct` stayed 0 throughout both episodes examined here). The signal
-looks like it's working as designed, not indicating a hardware fault.
+Across the full week, elevated `magnoise` — whether from sailing dynamics or the unexplained
+at-rest daytime pattern — has not been observed to trigger a bad recalibration event
+(`lastcaleventfitdeltapct` stayed 0 throughout both episodes examined here). Whatever is
+driving the daytime pattern, it hasn't been shown to degrade the calibration in use.
 
 ## Reproducing these queries
 
@@ -109,8 +122,13 @@ the comparison series used above.
 
 ## Open questions / not yet done
 
-- Cloudy-day or shaded-panel comparison to separate solar-EMI vs. self-heating for the
-  at-rest daytime pattern.
+- **What actually drives the at-rest daytime pattern.** Solar/charge current and eCompass
+  self-heating are both ruled out (see Test A/B above). Other candidates worth checking
+  before speculating further: something else diurnal near the sensor that isn't captured by
+  current/temperature (marina RF/other vessels' electronics active during the day, a
+  scheduled process on the Pi itself, WiFi/AIS/other onboard transmitters with a daily
+  pattern), or an artifact internal to the fusion library's noise-covariance calculation
+  unrelated to the physical environment. No evidence for any of these yet.
 - Whether the ~13-hour decay constant after a sailing disturbance is consistent across
   multiple sailing sessions, or specific to 08-26's conditions.
 - Whether `magfit`'s multi-day drift (6.9% -> 7.9% -> 2.9% -> 8%) has its own pattern worth
