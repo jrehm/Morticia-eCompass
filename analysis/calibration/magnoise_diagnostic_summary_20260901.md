@@ -14,6 +14,15 @@ library's own docs, the companion diagnostic is comparing `magfieldmagnitude` (i
 `magfieldmagnitudetrial` — that's how to tell a genuine magnetic disturbance from an
 ordinary periodic recalibration on stationary data.
 
+**Signal vs. noise, roughly:** `magnoise` is normalized against the calibrated field
+magnitude (`magfieldmagnitude`, ~48.09 uT here), so its value scales with how far the
+instantaneous field-strength reading deviates from that calibration, as a fraction of the
+field. In practical terms: the quiet-baseline floor (~0.00018) and the "unreliable"
+threshold (0.00056) both correspond to roughly a **4-5% deviation** in field magnitude, while
+the peaks seen during the 08-26 racing spike and the unexplained daytime pattern (0.004-0.008)
+correspond to roughly **13-18% deviation** — a real, sizeable disturbance to the field at the
+sensor, not just electrical noise on the reading.
+
 ## Two distinct drivers found, not one
 
 Naively this metric "varies a lot" over any given day. Lining it up against `navigation.
