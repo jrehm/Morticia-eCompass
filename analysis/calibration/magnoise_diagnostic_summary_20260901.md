@@ -1,16 +1,74 @@
 # Mag Noise (`orientation.calibration.magnoise`) — Diagnostic Characterization
 
-**Status (2026-09-01):** the disturbance is characterized (an intermittent AC-like magnetic
-field of ~4–8 µT amplitude at the sensor, on a schedule that tracks nothing onboard) but
-its source is not yet identified. Next step is a firmware instrument, not more InfluxDB
-mining — see "Next steps".
+**Status (2026-09-02):** two separate phenomena, in priority order:
 
-**Source:** live InfluxDB `signalk` bucket on HALPI2, 2026-08-26 → 2026-09-01 (dock, no
+1. **DC hard-iron drift along the bow axis** — thermal (~0.5 µT/°C, steepening above
+   ~35 °C) plus a slow creep (~2 µT/day). Produces up to **100° of eCompass heading error at
+   the dock** on a hot afternoon while the fluxgate holds ±1°. Found via `maginclination`,
+   not `magnoise`. See "DC drift" below. **This is the eCompass's real problem.**
+2. `magfit` "drift" — float32 artifact, not a signal. See "magfit".
+3. **Intermittent AC-like field** of ~4–8 µT at the sensor on an occupancy-shaped schedule
+   (weekend nights, then a hot weekday afternoon), source off-boat most likely. Well
+   suppressed by the Kalman filter (inclination σ stays ~0.3°). Lower priority.
+
+**Source:** live InfluxDB `signalk` bucket on HALPI2, 2026-08-26 → 2026-09-02 (dock, no
 sailing; SOG < 0.3 kn every hour). Query helper: `~/bin/fluxq "<flux>"` on `halos` (reads
 the token from the `signalk-to-influxdb2` plugin config). Hourly pivots were done on the Mac
 in the calibration `.venv`; no CSVs saved.
 
-## What the field actually is
+## DC drift: eCompass heading vs. fluxgate at the dock
+
+`maginclination` (`SV_9DOF_GBY_KALMAN.fDeltaPl`) is the angle between the Kalman-filtered
+geomagnetic vector and gravity — orientation-independent, so mount sag cannot move it; only
+a field change or a sensor offset change can. Nights it reads 71–72° (local dip ≈ 70.5°,
+i.e. the calibration is right at ~21 °C). Then:
+
+| local time | die temp | incl | B_h′ = 48.1·cos(incl) | eCompass − fluxgate |
+|---|---|---|---|---|
+| 08-29 03:00 | 21 °C | 70.9° | 15.7 µT | +3° |
+| 08-29 13:00 | 34 °C | 79.2° | 9.0 µT | −3.4° |
+| 08-30 (overcast, 23 °C all day) | 23 °C | 71 → 75° | 15.7 → 12.4 µT | +4 → −2° |
+| 09-01 03:00 | 25 °C | 79.2° | 9.0 µT | −9.9° |
+| 09-01 14:00 | 39 °C | 84.9° | 4.3 µT | **−99.6°** |
+
+Fluxgate (`sensors.fluxgate.headingMagnetic`) range for the whole week: 3.9°. eCompass
+(`sensors.ecompass.headingMagnetic`) range: 107.5°. Inclination correlates with die
+temperature at r = 0.84–0.98 within a day; high-pass (cloud-scale) residuals show no
+tracking of solar or battery current — so the daily term is thermal, not current.
+
+With |B| held at 48.1 by the calibration, inclination gives the remaining horizontal field
+and the heading error gives its rotation, so the disturbance vector is solvable
+(along-B_h / across-B_h, µT): 08-29 13:00 → −6.6 / +0.5; 09-01 03:00 → −6.7 / +1.5;
+09-01 14:00 → −16.3 / +4.2. The vector is almost purely anti-parallel to the horizontal
+geomagnetic field. The boat sits at 190°, so B_h points toward the stern and the disturbance
+points **toward the bow** — a fixed sensor/boat-frame axis. That fits a sensor-axis offset
+drift or a fixed nearby magnet, and does not fit an external or moving source.
+
+Two components, both on that axis:
+- **thermal:** ~0.5 µT/°C from 21 °C, steepening above ~35 °C (6.6 µT at 34 °C, ~10 µT of
+  additional shift at 39 °C over the creep baseline);
+- **creep:** night baseline moved ~6.7 µT in three days, including straight through the
+  flat-23 °C overcast day — not thermal.
+
+Why `magnoise` missed it: a horizontal disturbance projects onto the 71°-dipped field by
+only cos 71° ≈ 0.33, so |Bc| moves ~2 µT (just above the floor) while inclination swings
+7°. Inclination is the sensitive DC detector; magnoise is a magnitude-only, single-sample
+metric.
+
+Consequences:
+- The 46° HDGmE/HDGmF gap under sail and session-to-session inconsistency in the deviation
+  work may be substantially this rather than mounting or soft-iron. Deviation fits need
+  `environment.inside.ecompass.temperature` as a covariate and the calibration's reference
+  temperature recorded.
+- The eCompass is not usable as a heading source unless this is fixed; the fluxgate switch
+  on 2026-08-19 was the right call.
+
+Separating sensor offset from a nearby magnet needs physical tests (see "Next steps").
+Candidates within ~10 cm of the sensor: magnetic latch, speaker, relay, the SH-ESP32
+board's own power inductor. Driver check: FXOS8700 magnetic sensor reset is enabled every
+cycle (`M_CTRL_REG2 m_rst_cnt = 00`), so element hysteresis is not the explanation.
+
+## What `magnoise` actually is
 
 `magnoise` = `SV_9DOF_GBY_KALMAN.fQv6x1[3]`, computed in
 `OrientationSensorFusion-ESP/src/fusion/fusion.c` (lines ~1106–1110, 1220):
@@ -121,16 +179,35 @@ Observed: +0.82 %/day while 2.86 → 3.99, +1.65 %/day while 4.05 → 7.97, then
 
 ## Next steps
 
-1. **Firmware instrument (decisive, cheap):** publish per-axis 1-s standard deviation of
-   `Bc` (x, y, z) at 1 Hz, plus an on-demand ~2-s raw burst at full ODR via the existing
-   port-80 API. The axis with the variance gives the direction to the source (vertical vs.
-   horizontal, fore-aft vs. athwartships); the burst gives the frequency (60 Hz vs. a
-   switcher) and confirms AC vs. impulsive. One elevated hour settles source class and
-   bearing.
-2. **Field checks during an elevated period:** unplug Morticia's shore cord for a minute
-   (own-boat AC side in/out); note which neighboring boats are occupied / running A/C.
-3. **Mitigation regardless of source:** read the magnetometer at the 200 Hz hybrid ODR and
-   average 5 samples per 40 Hz fusion cycle (~4× attenuation of 60 Hz, ~1.5 cycles per
-   window). Currently every fusion cycle trusts one raw sample.
-4. Re-run the sample-distribution check after any change; the at-floor fraction and the
-   histogram mode are the two numbers to watch.
+**DC drift (priority 1):**
+
+1. **Sensor vs. surroundings test (dock, any day):** warm only the eCompass enclosure
+   (hair dryer, a few minutes) while the boat stays cool; watch `maginclination` and
+   `sensors.ecompass.headingMagnetic` vs. fluxgate. If they move → sensor-local (offset
+   tempco or a magnet inside/on the enclosure or board). Then let it cool and relocate the
+   eCompass ~1 m for a day: if the daily swing follows the sensor → sensor/enclosure; if it
+   stays with the location → a fixed magnet near the mount.
+2. **Inventory within ~10 cm of the sensor:** magnetic latches, speakers (VHF), relays,
+   power inductor on the SH-ESP32, ferrous fasteners. Anything with a magnet is a suspect
+   for the thermal term; anything steel is a suspect for the creep.
+3. **Publish the calibrated field vector** `Bc[x,y,z]` (1 Hz) so the disturbance vector is
+   read directly instead of back-solved from inclination + heading error. Same firmware
+   change as the AC instrument below; do this first.
+4. **Deviation analysis:** add `environment.inside.ecompass.temperature` as a covariate in
+   the sailing-deviation fits and check the 08-12 / 08-26 sessions for temperature range;
+   record the calibration's reference temperature in `CALIBRATION.md`.
+5. If sensor-local: evaluate a temperature-compensated magnetometer (or per-axis offset
+   tempco correction from a dock-day characterization) before any further deviation work.
+
+**AC noise (priority 3):**
+
+6. **Firmware instrument:** per-axis 1-s standard deviation of `Bc` at 1 Hz, plus an
+   on-demand ~2-s raw burst at full ODR via the existing port-80 API — axis gives the
+   source direction, burst gives the frequency (60 Hz vs. a switcher).
+7. **Field checks during an elevated period:** unplug Morticia's shore cord for a minute;
+   note which neighboring boats are occupied / running A/C.
+8. **Mitigation regardless of source:** read the magnetometer at the 200 Hz hybrid ODR and
+   average 5 samples per 40 Hz fusion cycle (~4× attenuation of 60 Hz). Do this only after
+   at least one elevated period has been captured with item 6.
+9. Re-run the sample-distribution check after any change; at-floor fraction and histogram
+   mode are the two numbers to watch.
