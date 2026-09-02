@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.5.0] - 2026-09-02
+
+### Added
+- Calibrated geomagnetic field vector, published at 1 Hz to
+  `orientation.calibration.magfieldvector.{x,y,z}` (uT, sensor/boat-frame
+  axes — bow, starboard, down; not heading-compensated). Required a local
+  patch to `OrientationSensorFusion-ESP` (`GetMagneticBcX/Y/Z()` exposing
+  `sfg_->Mag.fBc[]`, previously private) — see README.md "Local Library
+  Patches". Feeds two open investigations: the DC hard-iron drift (thermal
+  + creep) found chasing `magnoise`, and the `magnoise` AC-disturbance
+  direction/frequency work. See `TODO.md` "eCompass DC Hard-Iron Drift" and
+  `handoffs/magnoise-instrumentation.md`.
+
+---
+
 ## [1.4.0] - 2026-08-12
 
 ### Added

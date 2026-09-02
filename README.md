@@ -235,11 +235,15 @@ no code change needed.
 Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
 `SK_CONNECTION_TIMEOUT_MS` in `src/main.cpp`.
 
-## Local SensESP Patches
+## Local Library Patches
 
-This project requires one patch to the local SensESP library copy.
-It is lost on `pio run --target clean` or any library upgrade and
-**must be reapplied manually** before the project will compile.
+This project requires patches to two vendored libraries. Both are lost on
+`pio run --target clean` or any library upgrade and **must be reapplied
+manually** before the project will compile — a plain `pio run` has also been
+observed to wipe them (not just `--target clean`), so re-check before
+assuming a build failure is a real regression.
+
+### SensESP
 
 **Files (apply to BOTH — `shesp32` and `shesp32_ota` are separate
 PlatformIO envs with independent `.pio/libdeps/` copies of SensESP):**
@@ -260,6 +264,52 @@ the primary HTTP server.
 (Learned the hard way 2026-08-12: patching only `shesp32/` and forgetting
 `shesp32_ota/` compiles fine for USB builds but fails OTA uploads with
 `'get_http_server' ... not accessible from this context`.)
+
+### OrientationSensorFusion-ESP
+
+**Files (apply to BOTH — `shesp32` and `shesp32_ota` have independent
+`.pio/libdeps/` copies):**
+- `.pio/libdeps/shesp32/OrientationSensorFusion-ESP/src/sensor_fusion_class.h`
+- `.pio/libdeps/shesp32/OrientationSensorFusion-ESP/src/sensor_fusion_class.cc`
+- `.pio/libdeps/shesp32_ota/OrientationSensorFusion-ESP/src/sensor_fusion_class.h`
+- `.pio/libdeps/shesp32_ota/OrientationSensorFusion-ESP/src/sensor_fusion_class.cc`
+
+Add to the header, with the other `GetMagnetic*` public getters (after
+`GetMagneticBMagTrial()`):
+```cpp
+// LOCAL PATCH — expose the calibrated field vector (uT) for the DC
+// hard-iron drift and magnoise-direction investigations. See TODO.md
+// "eCompass DC Hard-Iron Drift" / handoffs/magnoise-instrumentation.md.
+float GetMagneticBcX(void);
+float GetMagneticBcY(void);
+float GetMagneticBcZ(void);
+```
+
+Add to the `.cc`, after `GetMagneticBMag()`:
+```cpp
+float SensorFusion::GetMagneticBcX(void) {
+  return sfg_->Mag.fBc[CHX];
+}  // end GetMagneticBcX()
+
+float SensorFusion::GetMagneticBcY(void) {
+  return sfg_->Mag.fBc[CHY];
+}  // end GetMagneticBcY()
+
+float SensorFusion::GetMagneticBcZ(void) {
+  return sfg_->Mag.fBc[CHZ];
+}  // end GetMagneticBcZ()
+```
+
+`sfg_` (the library's internal `SensorFusionGlobals*`) is private to
+`SensorFusion`, and the upstream class exposes field *magnitude*
+(`GetMagneticBMag()`) and inclination but no vector accessor — `sfg_->Mag.fBc[]`
+is the per-cycle calibrated (soft-/hard-iron corrected) field vector computed
+in `conditionSensorReadings()`. This patch restores access so `main.cpp` can
+publish `orientation.calibration.magfieldvector.{x,y,z}` at 1 Hz by calling
+`orientation_sensor->sensor_interface_->GetMagneticBcX()` etc. directly
+(SignalK-Orientation's `OrientationValues` wrapper is untouched — it has no
+vector-typed output, only scalar `OrientationValType`s, so these calls bypass
+it rather than extending it).
 
 ## Known Upgrade Issues
 

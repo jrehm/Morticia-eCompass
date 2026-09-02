@@ -89,6 +89,12 @@
 #define CALIBRATION_REPORTING_INTERVAL_MS (4000)
 #define RATE_REPORTING_INTERVAL_MS        (200)
 #define POWER_REPORTING_INTERVAL_MS       (1000)
+// Faster than CALIBRATION_REPORTING_INTERVAL_MS: DC drift and magnoise
+// direction analysis both average this vector over a window at the client
+// end, so the raw feed needs to be finer-grained than the 4 s calibration
+// diagnostics. See TODO.md "eCompass DC Hard-Iron Drift" and
+// handoffs/magnoise-instrumentation.md.
+#define MAG_VECTOR_REPORTING_INTERVAL_MS  (1000)
 // Dedicated, faster temperature feed for the thermal-compensation Zip only
 // (see COMPASS HEADING section below) -- decoupled from
 // CALIBRATION_REPORTING_INTERVAL_MS so headingCompass/headingMagnetic aren't
@@ -324,6 +330,9 @@ void setup() {
   const char* kSKPathMagFieldMag      = "orientation.calibration.magfieldmagnitude";
   const char* kSKPathMagFieldMagTrial = "orientation.calibration.magfieldmagnitudetrial";
   const char* kSKPathMagInclination   = "orientation.calibration.maginclination";
+  const char* kSKPathMagFieldVectorX = "orientation.calibration.magfieldvector.x";
+  const char* kSKPathMagFieldVectorY = "orientation.calibration.magfieldvector.y";
+  const char* kSKPathMagFieldVectorZ = "orientation.calibration.magfieldvector.z";
   const char* kSKPathMagCalEventFit      = "orientation.calibration.lastcaleventfitdeltapct";
   const char* kSKPathMagCalEventHeading  = "orientation.calibration.lastcaleventheadingdeltadeg";
   const char* kSKPathTemperature     = "environment.inside.ecompass.temperature";
@@ -646,6 +655,59 @@ void setup() {
   auto maginclination_output = std::make_shared<SKOutput<float>>(
       kSKPathMagInclination, kConfigPathNone, maginclination_metadata);
   maginclination->connect_to(maginclination_output);
+
+  // Calibrated geomagnetic field vector (uT), sensor/boat-frame axes (bow,
+  // starboard, down) -- not heading-compensated. Published at
+  // MAG_VECTOR_REPORTING_INTERVAL_MS (1 Hz) per TODO.md "eCompass DC
+  // Hard-Iron Drift" and handoffs/magnoise-instrumentation.md: averaged
+  // over a window, the mean gives the DC disturbance vector directly
+  // (previously back-solved from B-magnitude + inclination); the per-axis
+  // std-dev gives the AC noise direction/frequency work. Requires the
+  // LOCAL PATCH to OrientationSensorFusion-ESP (see README.md "Local
+  // OrientationSensorFusion-ESP Patches") -- SignalK-Orientation's
+  // OrientationValues wrapper has no vector accessor, so these call
+  // sensor_interface_ directly instead of going through OrientationValues.
+  auto magfieldvector_x = std::make_shared<RepeatSensor<float>>(
+      MAG_VECTOR_REPORTING_INTERVAL_MS, [orientation_sensor]() {
+        return orientation_sensor->sensor_interface_->GetMagneticBcX();
+      });
+  auto magfieldvector_x_metadata = std::make_shared<SKMetadata>();
+  magfieldvector_x_metadata->units_ = "uT";
+  magfieldvector_x_metadata->description_ =
+      "Calibrated geomagnetic field vector, bow-axis (X) component";
+  magfieldvector_x_metadata->display_name_ = "Mag Field Bc X";
+  magfieldvector_x_metadata->short_name_ = "BcX";
+  auto magfieldvector_x_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagFieldVectorX, kConfigPathNone, magfieldvector_x_metadata);
+  magfieldvector_x->connect_to(magfieldvector_x_output);
+
+  auto magfieldvector_y = std::make_shared<RepeatSensor<float>>(
+      MAG_VECTOR_REPORTING_INTERVAL_MS, [orientation_sensor]() {
+        return orientation_sensor->sensor_interface_->GetMagneticBcY();
+      });
+  auto magfieldvector_y_metadata = std::make_shared<SKMetadata>();
+  magfieldvector_y_metadata->units_ = "uT";
+  magfieldvector_y_metadata->description_ =
+      "Calibrated geomagnetic field vector, starboard-axis (Y) component";
+  magfieldvector_y_metadata->display_name_ = "Mag Field Bc Y";
+  magfieldvector_y_metadata->short_name_ = "BcY";
+  auto magfieldvector_y_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagFieldVectorY, kConfigPathNone, magfieldvector_y_metadata);
+  magfieldvector_y->connect_to(magfieldvector_y_output);
+
+  auto magfieldvector_z = std::make_shared<RepeatSensor<float>>(
+      MAG_VECTOR_REPORTING_INTERVAL_MS, [orientation_sensor]() {
+        return orientation_sensor->sensor_interface_->GetMagneticBcZ();
+      });
+  auto magfieldvector_z_metadata = std::make_shared<SKMetadata>();
+  magfieldvector_z_metadata->units_ = "uT";
+  magfieldvector_z_metadata->description_ =
+      "Calibrated geomagnetic field vector, down-axis (Z) component";
+  magfieldvector_z_metadata->display_name_ = "Mag Field Bc Z";
+  magfieldvector_z_metadata->short_name_ = "BcZ";
+  auto magfieldvector_z_output = std::make_shared<SKOutput<float>>(
+      kSKPathMagFieldVectorZ, kConfigPathNone, magfieldvector_z_metadata);
+  magfieldvector_z->connect_to(magfieldvector_z_output);
 
   // ========== MAG CAL CHANGE DETECTOR ==========
   // Watches magfit (the in-use fit error) for any single-interval change
