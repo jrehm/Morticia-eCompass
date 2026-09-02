@@ -1,156 +1,136 @@
 # Mag Noise (`orientation.calibration.magnoise`) — Diagnostic Characterization
 
-**Source:** live InfluxDB `signalk` bucket queries (HALPI2), 2026-08-25 through 2026-09-01,
-not a CSV export from a single logged session. No raw data files saved to `data/` for this
-pass — queries are reproducible via the Flux snippets below against the same bucket.
+**Status (2026-09-01):** the disturbance is characterized (an intermittent AC-like magnetic
+field of ~4–8 µT amplitude at the sensor, on a schedule that tracks nothing onboard) but
+its source is not yet identified. Next step is a firmware instrument, not more InfluxDB
+mining — see "Next steps".
 
-## What the field is
+**Source:** live InfluxDB `signalk` bucket on HALPI2, 2026-08-26 → 2026-09-01 (dock, no
+sailing; SOG < 0.3 kn every hour). Query helper: `~/bin/fluxq "<flux>"` on `halos` (reads
+the token from the `signalk-to-influxdb2` plugin config). Hourly pivots were done on the Mac
+in the calibration `.venv`; no CSVs saved.
 
-`orientation.calibration.magnoise` (`src/main.cpp:584-597`) is the FXOS8700CQ fusion
-library's magnetic noise covariance — how noisy/inconsistent raw magnetometer readings are
-while the library fits the calibration ellipsoid. Unitless, reported at 0.25 Hz. Firmware
-metadata (`main.cpp:592`) flags values **above 0.00056 as unreliable**. Per the fusion
-library's own docs, the companion diagnostic is comparing `magfieldmagnitude` (in-use) vs.
-`magfieldmagnitudetrial` — that's how to tell a genuine magnetic disturbance from an
-ordinary periodic recalibration on stationary data.
+## What the field actually is
 
-**Signal vs. noise, roughly:** `magnoise` is normalized against the calibrated field
-magnitude (`magfieldmagnitude`, ~48.09 uT here), so its value scales with how far the
-instantaneous field-strength reading deviates from that calibration, as a fraction of the
-field. In practical terms: the quiet-baseline floor (~0.00018) and the "unreliable"
-threshold (0.00056) both correspond to roughly a **4-5% deviation** in field magnitude, while
-the peaks seen during the 08-26 racing spike and the unexplained daytime pattern (0.004-0.008)
-correspond to roughly **13-18% deviation** — a real, sizeable disturbance to the field at the
-sensor, not just electrical noise on the reading.
+`magnoise` = `SV_9DOF_GBY_KALMAN.fQv6x1[3]`, computed in
+`OrientationSensorFusion-ESP/src/fusion/fusion.c` (lines ~1106–1110, 1220):
 
-## Two distinct drivers found, not one
-
-Naively this metric "varies a lot" over any given day. Lining it up against `navigation.
-speedOverGround`, `navigation.attitude.roll`, `electrical.solar.current`, and
-`environment.inside.ecompass.temperature` over the week separates two unrelated mechanisms.
-
-### 1. Motion/heel-driven spike — confirmed against the 2026-08-26 race session
-
-Boat was on/around the dock from ~4PM EDT, raced 6-8PM EDT (per owner). `magnoise` sat flat
-at baseline (~0.00025) through the first two hours (dockside prep), then tracked heel
-dynamics almost to the minute once racing started:
-
-| Time (EDT) | SOG | Roll std-dev (15-min) | `magnoise` |
-|---|---|---|---|
-| 6:15 PM | rising | 0.017 | still baseline |
-| 6:45 PM | 2.0 kn | 0.058 | 0.00092 |
-| 7:15 PM | 4.3 kn | 0.064 | 0.00308 |
-| 7:30-7:45 PM | 4.3 kn | **0.16 (peak)** | — |
-| 8:00 PM | 3.3 kn | 0.035 | **0.00434 (peak, ~17x baseline)** |
-| 8:15 PM | ~0 (docked) | 0.009 | 0.00107 |
-
-Roll variance (heel/tacking) and `magnoise` rise and peak together. Physically sensible:
-rapid heel changes and tacking genuinely move raw magnetometer readings relative to the
-fitted calibration ellipsoid, so the fusion library is correctly reporting real reading
-variance from boat motion — not an electrical fault.
-
-**Slow decay tail:** roll variance collapsed back to near-zero within 15 minutes of docking
-(8:15 PM), but `magnoise` took **~13 hours** to fully settle back to baseline (didn't reach
-quiet levels again until ~10 AM the next morning, 2026-08-27). The metric has a
-slow-decaying memory — a disturbance during a sail keeps showing as "elevated" well after
-the boat is calm again. Relevant if this is ever used as a live/alerting health check: don't
-expect a fast clear after a sail.
-
-### 2. Separate, at-rest daytime pattern — driver still unidentified (solar current and temperature both ruled out)
-
-On non-sailing days (e.g. 2026-08-31 -> 09-01, and to a lesser extent 08-28 -> 08-31),
-`magnoise` still climbs during daylight hours even though `navigation.speedOverGround`
-confirms the boat never left the dock (stayed at the ~0.05 kn GPS noise floor all day —
-moored in its usual current-free home berth).
-
-**Initial hypothesis (disconfirmed):** the 24-hour hourly-mean view showed `magnoise`
-tracking `electrical.solar.current` (~0 overnight to ~1.5A midday peak) and
-`environment.inside.ecompass.temperature` (~24°C overnight to ~40°C by late afternoon).
-Both looked plausible and were confounded with each other (both sun-driven), so two
-follow-up tests were run at finer resolution to separate them:
-
-**Test A — last-hour, fine resolution (2026-09-01, ~5-6PM EDT):** `magnoise` climbed
-smoothly from 0.00177 to 0.00326 (~1.8x) over one hour, while `electrical.solar.power` was
-flat-to-declining (5.5W -> 4.9W -> 5.8W -> 3.9W, no upward trend) and
-`environment.inside.ecompass.temperature` was essentially flat (~311.5K the whole hour).
-Roll variance stayed near-zero, confirming the boat was still moored. Neither candidate
-tracks the rise at this resolution.
-
-**Test B — clean overnight charger cycle, no sailing, no sun (2026-08-30 22:00 UTC ->
-2026-08-31 09:00 UTC):** the battery charger switched on at ~2AM EDT, `electrical.batteries.
-house.current` jumping from -1.2A (discharging) to +2.9A (charging) — a larger swing than
-the daytime solar current ever produces. `magnoise` did not respond at all: 0.00044 just
-before the jump, 0.00028-0.00035 during and after 3+ hours of steady charging. Confirmed by
-the boat owner independently: the charger also runs overnight with no associated `magnoise`
-change, which is what this test shows directly.
-
-**Conclusion: solar/charge current and sensor self-heating (as measured by
-`environment.inside.ecompass.temperature`) are both ruled out as drivers of the at-rest
-daytime pattern.** The original correlation in the 24-hour hourly-mean view was most likely
-a coincidental diurnal-shape overlap (both curves happen to rise-then-fall across a day)
-rather than a causal link. The actual driver remains unidentified — see Open Questions.
-
-**Also ruled out on physical grounds: the sun directly disturbing the ambient magnetic
-field.** `magfieldmagnitude` reads ~48.09 uT at this location. The sun's actual known
-effects on Earth's field are the Sq (solar-quiet) daily ionospheric-current variation
-(~20-30 nT peak-to-peak at mid-latitudes, ~0.05% of the ambient field) and geomagnetic
-storms (irregular, solar-wind-driven, ~500-1000 nT / ~1-2% even for a strong one, tracked via
-the Kp index). Both are one to three orders of magnitude too small to move `magnoise` from
-its ~0.00025 baseline to the observed ~0.008 peak (~30x), and a cheap AHRS-grade
-magnetometer's own noise floor would bury the Sq signal entirely. Storms are also episodic,
-not a reliable "every sunny afternoon" clock, whereas the observed pattern tracks local solar
-time reliably day after day -- the wrong recurrence shape for space weather. Whatever drives
-this is local to the boat/marina, not the sun's magnetic field itself.
-
-## `magfit` (actual calibration quality) is a separate, slower-moving signal
-
-Around the 08-26 race, `magfit` did not jump with the `magnoise` spike, and no
-`lastcaleventfitdeltapct` recalibration event fired at all during the observed window. It
-instead drifted slowly: ~6.9% -> ~7.9% over the evening of 08-26 into the morning of 08-27,
-then dropped to ~2.9-3.0% by mid-morning 08-27. By 2026-09-01 it had drifted back up to a
-flat 8% for the entire day (zero cal events that day either).
-
-This reconciles an inconsistency spotted in passing: [CALIBRATION.md](../../../morticia-project/CALIBRATION.md)
-(in the morticia-project repo) currently states magfit is "<3%" — that was accurate as of
-the morning of 08-27, but the value has since drifted back up to 8% by 09-01. `magfit`
-wanders over a period of days independent of the much faster `magnoise` swings above, and is
-worth spot-checking periodically rather than treated as a fixed number.
-
-## Reassurance
-
-Across the full week, elevated `magnoise` — whether from sailing dynamics or the unexplained
-at-rest daytime pattern — has not been observed to trigger a bad recalibration event
-(`lastcaleventfitdeltapct` stayed 0 throughout both episodes examined here). Whatever is
-driving the daytime pattern, it hasn't been shown to degrade the calibration in use.
-
-## Reproducing these queries
-
-Token/org/bucket per `signalk-to-influxdb2` plugin config on HALPI2 (`org: marine, bucket:
-signalk`). Example — hourly mean of `magnoise` over N days:
-
-```flux
-from(bucket:"signalk")
-  |> range(start: -7d)
-  |> filter(fn: (r) => r._measurement == "orientation.calibration.magnoise" and r._field == "value")
-  |> aggregateWindow(every: 1h, fn: mean, createEmpty: false)
-  |> keep(columns: ["_time","_value"])
+```
+ftmp     = |Bc| - B            // one calibrated magnetometer sample vs. stored field magnitude
+fQvBQd   = max(3·ftmp², 5.0)   // 5 µT² floor (FQVB_9DOF_GBY_KALMAN)
+magnoise = fQvBQd / (12·B²)    // + ~3e-6 gyro term, negligible
 ```
 
-Swap `_measurement` for `navigation.speedOverGround`, `navigation.attitude.roll`,
-`electrical.solar.current`, `environment.inside.ecompass.temperature`, or
-`orientation.calibration.magfit` / `orientation.calibration.lastcaleventfitdeltapct` to pull
-the comparison series used above.
+So **`magnoise = (ΔB/B)²/4`**, i.e. **|ΔB| = 2·B·√magnoise** (B = 48.09 µT here):
 
-## Open questions / not yet done
+| magnoise | ΔB | note |
+|---|---|---|
+| 0.000183 | < 1.3 µT | floor: 5/(12·48.09²), exactly the observed baseline |
+| 0.00056 | 2.3 µT | firmware "unreliable" threshold |
+| 0.0018 | 4.1 µT | |
+| 0.0043 | 6.3 µT | 08-26 race peak |
+| 0.008 | 8.6 µT | |
 
-- **What actually drives the at-rest daytime pattern.** Solar/charge current and eCompass
-  self-heating are both ruled out (see Test A/B above). Other candidates worth checking
-  before speculating further: something else diurnal near the sensor that isn't captured by
-  current/temperature (marina RF/other vessels' electronics active during the day, a
-  scheduled process on the Pi itself, WiFi/AIS/other onboard transmitters with a daily
-  pattern), or an artifact internal to the fusion library's noise-covariance calculation
-  unrelated to the physical environment. No evidence for any of these yet.
-- Whether the ~13-hour decay constant after a sailing disturbance is consistent across
-  multiple sailing sessions, or specific to 08-26's conditions.
-- Whether `magfit`'s multi-day drift (6.9% -> 7.9% -> 2.9% -> 8%) has its own pattern worth
-  tracking (e.g. does it reset on each reboot/recalibration, or wander continuously).
+Properties that matter for interpretation:
+
+- **Single sample, no memory.** `Bc` is one raw 6-byte register read per 40 Hz fusion
+  cycle (`kLoopsPerMagRead = 1`, FXOS8700 has no magnetometer FIFO). The 4-s Signal K
+  value is a snapshot of the latest cycle. Nothing is filtered or accumulated, so the
+  metric cannot "decay" — an elevated value means the field was off at that instant.
+- **It is a magnitude error, not a variance.** A static iron object or a DC current loop
+  gives a *steady* elevated value; an AC field gives a random value on every sample.
+- The Kalman filter uses it adaptively (higher `magnoise` → less weight on the
+  magnetometer), so heading is partly protected, but heading jitter still rises.
+
+## What the data shows
+
+**1. Sample-level structure: uncorrelated, continuous, mode away from zero.**
+Consecutive 4-s samples are independent (floor, 3.5 µT, floor, 1 µT, 4 µT ...). Every
+20-min window all week, day or night, contains samples at the floor *and* samples at
+3–5 µT; the hourly mean rises only because the upper tail thickens. Distribution of
+individual samples:
+
+| window | at floor | p50 | p90 | p99 | max |
+|---|---|---|---|---|---|
+| quiet night (09-01 00–04 EDT) | 73% | 1.3 | 1.9 | 2.9 | 5.1 µT |
+| elevated night (08-29 02–06 EDT) | 11% | 2.8 | 4.2 | 5.4 | 7.4 µT |
+| elevated day (09-01 12–14 EDT) | 1% | 3.9 | 5.5 | 6.7 | 8.3 µT |
+
+Zero-mean Gaussian noise would peak at zero; I2C bit corruption would be sparse and
+discrete. A **periodic (AC) field sampled at random phase** piles up near its amplitude
+(|A·sin φ|), which is what the elevated histograms look like. Working model: an AC magnetic
+field of ~4–8 µT amplitude at the sensor, switching on/off on a schedule.
+
+**2. Schedule (hourly mean, expressed as ΔB µT; floor ≈ 1.5 after averaging):**
+
+| local day | 0–9 AM | 10 AM–8 PM | 9–11 PM |
+|---|---|---|---|
+| 08-27 (Thu) | 2.9–3.2 | 1.5–1.9 | 1.7–2.1 |
+| 08-28 (Fri) | 2.3–3.6 | 1.5–2.2 | 2.2–2.7 |
+| 08-29 (Sat) | 2.6–3.1 | 1.6–2.9 | 1.9–2.8 |
+| 08-30 (Sun) | 2.5–3.1 | 1.7–2.4 | 1.9–2.1 |
+| 08-31 (Mon) | 1.6–1.7 | 1.5–2.6 (bump 1–5 PM) | 1.5 |
+| 09-01 (Tue) | 1.5 | 2.0 → **4.4** at 2 PM | — |
+
+Nights elevated Thu→Sun (rising from ~8 PM, peak 2–5 AM, gone by ~10 AM); regime ends over
+~20 min around **midnight Sun 08-30/31**; then daytime elevation on Mon/Tue. The post-race
+"13-hour decay" in the earlier draft was night #1 of this pattern, not a decay.
+
+**3. Ruled out with data (hourly, dock days):**
+
+| candidate | evidence |
+|---|---|
+| heel / motion | roll σ ≈ 0.03° all week; no correlation |
+| wind / mast shake | 13 kn at 08-31 00–03 was quiet; 3 kn at 08-30 03–05 was elevated |
+| mast rotation | `navigation.mast.rotation` σ = 0 except when moved (08-29 noon) |
+| solar current | sunnier days (08-27..29, 20–23 W) quieter than 09-01 (19 W) |
+| shore charger | elevated nights with charger off (08-29/30) and on (08-27/28); 08-31 charge cycle quiet; ΔB *fell* during 08-29 06–10 charge |
+| any onboard DC load | battery current flat −1.23 A ± 0.05 A through an entire 8 PM → 3 AM ramp |
+| sensor temperature | 08-31 rise with die temp flat; hotter days quieter |
+| N2K bus / fluxgate drive | fluxgate, rudder, mast sensor logged 24/7 all week |
+| eCompass reboot / recal | one reboot (08-27 06:00 EDT), no calibration adopted all week (B = 48.092, solver = 10 constant) |
+| Morticia's 120 V shore cord | draped on outside stbd cabin side, ~0.8–1 m from sensor; carries only the charger's ~3 A → nT-scale for a paired cord, ≤0.6 µT even single-conductor; and see charger row |
+| solar/geomagnetic activity | Sq ~20–30 nT, storms ≤1 µT — orders of magnitude too small |
+
+Note: masthead wind data stops 08-31 08:00 EDT — almost certainly the solar-charged wireless
+sensor's battery after the overcast 08-30 (solar flat ~0 W that day). Unrelated.
+
+**4. Interpretation.** An AC source close enough to induce several µT, whose on/off
+schedule follows human occupancy (weekend nights, then a hot weekday afternoon) rather than
+anything on Morticia — most plausibly a **neighboring boat's AC loads (A/C, heater,
+charger, inverter) or dock pedestal wiring**. 5 µT from a paired cable needs the conductors
+within ~1–2 m, so the eCompass's position relative to the adjacent slip and the pedestal is
+the relevant geometry. Not provable from onboard data.
+
+## `magfit` is not drifting — it is float32 absorption
+
+`magfit` = `MagCal.fFitErrorpc`, which only changes when a calibration is *adopted* (none
+was, all week). Between adoptions the library ages it by `+1/(40·86400)` = 2.9e-7 per
+fusion cycle (`magnetic.c` ~line 476, `FITERRORAGINGSECS = 86400`), nominally +1 %/day.
+Observed: +0.82 %/day while 2.86 → 3.99, +1.65 %/day while 4.05 → 7.97, then **stuck at
+8.000 from 08-31 02:00 EDT**. That is exactly float32 rounding: spacing is 2.4e-7 near 3
+(increment rounds down), 4.8e-7 near 4–8 (rounds up), 9.5e-7 at 8 (increment < half-spacing
+→ rounds to zero). Consequences:
+
+- `magfit` values are not a calibration-quality signal between adoption events. Only jumps
+  (08-27 06:00 reboot: 7.9 → 2.86, the stored calibration's real fit error) mean anything.
+- Aging is *permanently dead* once fFitErrorpc ≥ 8.0, so a trial calibration is accepted
+  only if `ftrFitErrorpc ≤ 8.0` (or ≤ 3.5 % with a higher-order solver). Mildly
+  protective for us; an upstream library bug worth reporting.
+- `lastcaleventfitdeltapct` staying 0 all week is correct — nothing was adopted.
+
+## Next steps
+
+1. **Firmware instrument (decisive, cheap):** publish per-axis 1-s standard deviation of
+   `Bc` (x, y, z) at 1 Hz, plus an on-demand ~2-s raw burst at full ODR via the existing
+   port-80 API. The axis with the variance gives the direction to the source (vertical vs.
+   horizontal, fore-aft vs. athwartships); the burst gives the frequency (60 Hz vs. a
+   switcher) and confirms AC vs. impulsive. One elevated hour settles source class and
+   bearing.
+2. **Field checks during an elevated period:** unplug Morticia's shore cord for a minute
+   (own-boat AC side in/out); note which neighboring boats are occupied / running A/C.
+3. **Mitigation regardless of source:** read the magnetometer at the 200 Hz hybrid ODR and
+   average 5 samples per 40 Hz fusion cycle (~4× attenuation of 60 Hz, ~1.5 cycles per
+   window). Currently every fusion cycle trusts one raw sample.
+4. Re-run the sample-distribution check after any change; the at-floor fraction and the
+   histogram mode are the two numbers to watch.
