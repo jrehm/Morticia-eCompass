@@ -311,6 +311,15 @@ publish `orientation.calibration.magfieldvector.{x,y,z}` at 1 Hz by calling
 vector-typed output, only scalar `OrientationValType`s, so these calls bypass
 it rather than extending it).
 
+**Frame of the published vector (verified against the dock field, 2026-09-02):**
+the vector is in the library's remapped body frame, **not** the chip's marked
+axes and not bow/starboard/down. With the AGM01 mounted component-side up,
+J3 row fore-aft, marked +Y toward port (so marked +X toward the stern, +Z up),
+the published axes are `x = starboard, y = astern, z = down` — i.e.
+`(x, y, z)_published = (−Y, +X, −Z)_marked`. Check: at heading 190° the field
+reads (0.9, 12.2, 45.8) µT — horizontal component astern on +y, dip down on +z.
+See `analysis/calibration/magnoise_diagnostic_summary_20260901.md`.
+
 ## Known Upgrade Issues
 
 Issues encountered during the v1.0.0 dependency upgrade (April 2026) that

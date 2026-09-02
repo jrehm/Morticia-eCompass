@@ -65,30 +65,33 @@ Consequences:
 
 Separating sensor offset from a nearby magnet needs physical tests (see "Next steps").
 
-**Mounting facts (Jeff, 2026-09-02):** the SH-ESP32/FXOS8700 PCB is potted in epoxy (no
-enclosure) and taped to a carbon-fiber cross member immediately aft of the daggerboard
-trunk. The hull is entirely CF. The only significant metal nearby is the stainless mast
-step, 20–25 cm directly above the sensor.
+**Mounting facts (Jeff, 2026-09-02):** the magnetometer is an NXP **BRKT-STBC-AGM01**
+breakout (FXOS8700 + FXAS21002), potted in epoxy, taped component-side up to a CF cross
+member immediately aft of the daggerboard trunk. J3 row runs fore-aft; marked +Y → port,
+so marked +X → stern, +Z → up. I2C/power soldered to the J4-side pads, twisted pairs, led
+away along +Y (port) across the cross member, down the hull side, to the SH-ESP32 **~1 m
+below**. Hull entirely CF; the only metal nearby is the stainless mast step 20–25 cm
+directly above (on the Z axis).
+
+**Published vector frame:** (x, y, z)_published = (−Y, +X, −Z)_marked = (starboard,
+astern, down). Verified from the dock field (see README).
 
 **Accelerometer is clean:** hourly mean roll/pitch vs. die temperature: slope 0.002 °/°C,
 r ≈ 0 (inclination: 0.62 °/°C, r = 0.80). The only roll/pitch step all week is 08-29 08:00
 (0.3° trim change, someone stepping aboard) and inclination did not respond. So the drift
-is entirely on the magnetometer side; the accel in the same package sees nothing, which
-argues against gross package stress and toward magnetics.
+is entirely on the magnetometer side.
 
-Revised suspects, in order:
-1. **On-board magnetic parts potted with the sensor, 1–3 cm away:** the buck inductor
-   (DC-biased ferrite; permeability rises with temperature, ~0.2–0.5 %/°C) and steel-cored
-   plated parts (header pins, USB shell, screw terminals, ESP32 module shield can). Their
-   static field is calibrated out as hard iron; the temperature-dependent fraction and any
-   slow magnetization change are not. Fixed to the sensor axes — matches the bow-axis vector.
-2. **FXOS8700 magnetometer offset tempco** — same signature; separable from (1) only by
-   varying the inductor's current (WiFi/CPU load steps) or by physically separating sensor
-   and board.
-3. **Mast step / RF25** — a source 20–25 cm directly above gives a mostly *vertical* field
-   at the sensor; the observed vector is horizontal. Unlikely unless the RF25's magnet is
-   nearer than it sounds. Driver check: FXOS8700 magnetic sensor reset is enabled every
-   cycle (`M_CTRL_REG2 m_rst_cnt = 00`), so element hysteresis is not the explanation.
+**Disturbance axis:** resting −3.5 µT on published y (toward the bow) with x, z ≈ 0;
+under heat it grows on that same axis to 6–16 µT. In chip terms that is the FXOS8700's
+**marked X channel**, negative direction, alone. Nothing external lies on that axis: the
+SH-ESP32 (inductor, pins, shield can) is 1 m away, the harness leaves perpendicular along
++Y at milliamps, the mast step is on Z, and along ±X on the AGM01 there are only the
+FXAS21002 gyro (no magnetic material) and passives. A single-package-axis vector with the
+other two components at noise is the signature of a **per-axis internal offset drift in
+the FXOS8700 magnetometer (X channel)**: ~0.5 µT/°C, steepening above ~35 °C, plus a
+~2 µT/day walk. The load-step test (next steps, item 2) independently ruled out the
+SH-ESP32's inductor. Driver check: FXOS8700 magnetic sensor reset is enabled every cycle
+(`M_CTRL_REG2 m_rst_cnt = 00`), so the chip's own degauss is not enough.
 
 ## What `magnoise` actually is
 
@@ -225,11 +228,15 @@ Observed: +0.82 %/day while 2.86 → 3.99, +1.65 %/day while 4.05 → 7.97, then
 4. **Deviation analysis:** add `environment.inside.ecompass.temperature` as a covariate in
    the sailing-deviation fits and check the 08-12 / 08-26 sessions for temperature range;
    record the calibration's reference temperature in `CALIBRATION.md`.
-5. **Likely fix either way:** move the magnetometer onto its own small board on a short
-   lead, away from the SH-ESP32's inductor and steel-cored pins (the potted board stays as
-   the controller); or a temperature-compensated magnetometer. Per-axis offset-vs-
-   temperature correction from a dock-day characterization is a stopgap for the thermal
-   term but will not track the creep.
+5. **Fix: replace the magnetometer chip.** The sensor is already on its own board on a
+   1 m lead, so isolation is not the issue — the FXOS8700 itself is. Choose a part that
+   removes offset by construction rather than by compensation: **MMC5983MA / MMC5603**
+   (AMR with SET/RESET on every measurement — element offset and its tempco cancel) or
+   **RM3100** (PNI magneto-inductive, no offset by principle; the marine/UAV standard).
+   Either needs a driver in `OrientationSensorFusion-ESP`'s sensor layer
+   (`driver_fxos8700.c` is the template; the FXOS8700 accel and FXAS21002 gyro can stay)
+   and a fresh calibration. Per-axis offset-vs-temperature correction of the FXOS8700 is
+   a stopgap for the thermal term only; it will not track the creep.
 
 **AC noise (priority 3):**
 
