@@ -207,14 +207,21 @@ Observed: +0.82 %/day while 2.86 → 3.99, +1.65 %/day while 4.05 → 7.97, then
    minutes while the boat stays cool; watch `maginclination` and
    `sensors.ecompass.headingMagnetic` vs. fluxgate. Expected to move (board-local); if it
    doesn't, the source is off-board and the mast step / RF25 go back on the list.
-2. **Load-step test (separates inductor from sensor tempco):** with the board at stable
-   temperature, step the ESP32's supply current (e.g. WiFi TX burst or a busy-loop via the
-   port-80 API) and watch for an inclination step within seconds. A response means the
-   buck inductor's DC-biased field reaches the sensor; no response points at the sensor's
-   own offset tempco.
-3. **Publish the calibrated field vector** `Bc[x,y,z]` (1 Hz) so the disturbance vector is
-   read directly instead of back-solved from inclination + heading error. Same firmware
-   change as the AC instrument below; do this first.
+2. **Load-step test (separates inductor from sensor tempco) — DONE 2026-09-02 08:20 EDT,
+   negative.** Three 60-s cycles of 4-parallel `curl` against `http://192.168.8.214/api/info`
+   from HALPI2 (`/tmp/loadstep.sh`). Load confirmed: free heap −24 kB, Signal K delivery
+   dropped from ~40 to 7–20 samples/min. Field: hammer − rest = bx +0.09, by −0.20,
+   bz +0.48 µT against a 1-Hz single-sample noise of 0.84 µT rms and ~0.25 µT standard
+   error — no step above noise. A ~30–50 mA (inferred, not measured) current step moved the
+   field < 0.5 µT on every axis, so the buck inductor's DC-biased field is not the 6–16 µT
+   thermal source. Option 1 (12 V → USB power swap) would close the "current step not
+   measured" gap if wanted; the FXOS8700's own offset tempco is now the leading explanation.
+3. **Publish the calibrated field vector** `Bc[x,y,z]` — **DONE, firmware v1.5.0
+   (2026-09-02 07:06)**: `orientation.calibration.magfieldvector.{x,y,z}` at 1 Hz, flowing
+   to InfluxDB. First reading at the dock (26 °C): (0.9, 12.2, 45.8) µT — the resting
+   creep disturbance is ~−3.5 µT along sensor +y (the horizontal-field axis), nothing on x or
+   z. Analysis script: `analysis/calibration/magvector_vs_temp.py` (per-axis dB/dT from
+   live InfluxDB; needs > 3 °C of range).
 4. **Deviation analysis:** add `environment.inside.ecompass.temperature` as a covariate in
    the sailing-deviation fits and check the 08-12 / 08-26 sessions for temperature range;
    record the calibration's reference temperature in `CALIBRATION.md`.
