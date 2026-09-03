@@ -1,20 +1,93 @@
 # Mag Noise (`orientation.calibration.magnoise`) — Diagnostic Characterization
 
-**Status (2026-09-02):** two separate phenomena, in priority order:
+**Status (2026-09-03):** three phenomena, in priority order:
 
-1. **DC hard-iron drift along the bow axis** — thermal (~0.5 µT/°C, steepening above
-   ~35 °C) plus a slow creep (~2 µT/day). Produces up to **100° of eCompass heading error at
-   the dock** on a hot afternoon while the fluxgate holds ±1°. Found via `maginclination`,
-   not `magnoise`. See "DC drift" below. **This is the eCompass's real problem.**
-2. `magfit` "drift" — float32 artifact, not a signal. See "magfit".
-3. **Intermittent AC-like field** of ~4–8 µT at the sensor on an occupancy-shaped schedule
-   (weekend nights, then a hot weekday afternoon), source off-boat most likely. Well
-   suppressed by the Kalman filter (inclination σ stays ~0.3°). Lower priority.
+1. **Magnetometer offset drift with temperature (TCO)** — 0.73 µT/°C along a fixed diagonal
+   direction in the chip frame, linear, reversible. Produces up to **100° of eCompass
+   heading error at the dock** on a hot afternoon while the fluxgate holds ±1°. Measured
+   directly from `Bc` on 2026-09-02; the NXP datasheet specs this part's TCO_MAG at
+   ±0.8 µT/°C typical, so **the FXOS8700 is operating within spec** — it is simply not a
+   precision compass sensor over a 17 °C swing. See "TCO drift" below.
+2. **A non-thermal walk** in the resting baseline, not explained by TCO and not yet
+   separated from gear movement aboard. This, not the tempco, decides whether temperature
+   compensation is sufficient. See "Non-thermal walk".
+3. `magfit` "drift" — float32 artifact, not a signal. See "magfit".
+4. **Intermittent AC-like field** of ~4–8 µT at the sensor on an occupancy-shaped schedule,
+   source off-boat most likely. Well suppressed by the Kalman filter. Lower priority.
 
-**Source:** live InfluxDB `signalk` bucket on HALPI2, 2026-08-26 → 2026-09-02 (dock, no
-sailing; SOG < 0.3 kn every hour). Query helper: `~/bin/fluxq "<flux>"` on `halos` (reads
-the token from the `signalk-to-influxdb2` plugin config). Hourly pivots were done on the Mac
-in the calibration `.venv`; no CSVs saved.
+**Corrections to earlier revisions of this document** (git history has the originals; stated
+here because the retracted claims were confident and drove work):
+- *"Drift is confined to the chip's marked X channel."* **Wrong.** It was back-solved from
+  two observables (inclination, heading error) for a three-component vector, closed by
+  assuming |Bc| = 48.09 and no vertical component. The direct vector measurement falsifies
+  both assumptions: |Bc| moves −0.26 µT/°C and the drift has a z-component. The real
+  direction is diagonal, with all three axes contributing.
+- *"Thermal term ~0.5 µT/°C, steepening above ~35 °C."* **Wrong twice.** The magnitude is
+  0.73 µT/°C, and the apparent steepening was an artifact of viewing a linear offset drift
+  through `maginclination`, which is an arctan of the components. Measured directly, the
+  drift is linear (r = −0.96) with 0.1–0.4 µT of hysteresis.
+- *"On-board magnetics (buck inductor, steel-cored pins) are the leading suspect."*
+  Superseded: the load-step test was negative, the SH-ESP32 is 1 m away, and an in-spec
+  TCO explains the observation without any external source.
+
+**Source:** live InfluxDB `signalk` bucket on HALPI2, 2026-08-26 → 2026-09-03. Query helper:
+`~/bin/fluxq "<flux>"` on `halos` (reads the token from the `signalk-to-influxdb2` plugin
+config). Analysis script: `analysis/calibration/magvector_vs_temp.py`.
+
+## TCO drift: the measurement (2026-09-02, full diurnal cycle)
+
+Firmware v1.5.0 publishes the calibrated vector `Bc[x,y,z]` at 1 Hz, so the drift is now
+measured rather than inferred. Two dock windows at different headings, bracketing a sail:
+
+| quantity (heading-invariant) | segment A: dock @190°, 26→40 °C | segment B: dock @184°, 30→23 °C |
+|---|---|---|
+| d\|B\|/dT | −0.264 µT/°C (r = −0.96) | −0.254 µT/°C (r = −0.87) |
+| d(incl)/dT | +0.337 °/°C (r = +0.88) | +0.341 °/°C (r = +0.94) |
+
+Both quantities are invariant to the 6° mooring swing between segments, and two independent
+windows agree to 4%. Hysteresis on the rising vs. falling ramp is 0.1–0.4 µT — the effect is
+reversible, not creep.
+
+**Drift vector.** Relative to the coolest point of segment A, the unit direction in the
+chip's *marked* axes holds steady while the magnitude scales with temperature:
+
+| point | T | \|d\| | unit (Xm, Ym, Zm) |
+|---|---|---|---|
+| A 09:30 | 30.2 °C | 3.03 µT | (−0.76, +0.65, +0.08) |
+| A 11:00 | 37.0 °C | 8.02 µT | (−0.75, +0.61, +0.26) |
+| A 12:30 | 40.3 °C | 10.47 µT | (−0.74, +0.60, +0.30) |
+| A 15:00 | 39.1 °C | 7.15 µT | (−0.76, +0.56, +0.32) |
+
+Total 0.73 µT/°C; per marked axis ≈ (−0.55, +0.44, +0.21) µT/°C. A fixed diagonal direction
+with all three channels participating is exactly what three independent per-axis offset
+tempcos produce.
+
+**Datasheet check** (FXOS8700CQ Rev. 8, Table 4, magnetometer magnetic characteristics):
+
+| symbol | parameter | typ |
+|---|---|---|
+| TCO_MAG | zero-flux offset change with temperature | **±0.8 µT/°C** |
+| OFF_MAG | zero-flux offset accuracy | ±10 µT |
+| TCS_MAG | sensitivity change vs. temperature | ±0.1 %/°C |
+
+Measured 0.73 vs. ±0.8 typical: **the part is in spec.** It is not defective, not permed,
+and not obviously stressed. The datasheet also notes (§8.2) that offset is to some extent a
+result of stress on the sensor and can change after board mounting or mechanical stress —
+so epoxy potting cannot be *excluded* as an additional contributor, but nothing in the data
+requires it. `magfit` converging well pre-potting is consistent either way: at a single
+temperature a TCO of this size is invisible.
+
+## Non-thermal walk (open, confounded)
+
+Two observations the tempco does not explain:
+- Night-baseline inclination moved ~7° across 08-27 → 09-01 at near-constant temperature.
+- |B| at matched temperature is ~3 µT higher after the 09-02 sail than before it.
+
+Jeff was aboard 15:00–20:30 on 09-02 (setup, sail, packing), and gear movement changes hard
+iron, so neither is clean evidence of sensor walk. **This is the deciding measurement for
+the fix:** a two-point temperature calibration removes the TCO but not a random walk. What
+is needed is a clean unattended multi-day dock baseline with the vector flowing and nobody
+aboard.
 
 ## DC drift: eCompass heading vs. fluxgate at the dock
 
@@ -44,11 +117,12 @@ geomagnetic field. The boat sits at 190°, so B_h points toward the stern and th
 points **toward the bow** — a fixed sensor/boat-frame axis. That fits a sensor-axis offset
 drift or a fixed nearby magnet, and does not fit an external or moving source.
 
-Two components, both on that axis:
-- **thermal:** ~0.5 µT/°C from 21 °C, steepening above ~35 °C (6.6 µT at 34 °C, ~10 µT of
-  additional shift at 39 °C over the creep baseline);
-- **creep:** night baseline moved ~6.7 µT in three days, including straight through the
-  flat-23 °C overcast day — not thermal.
+Two components, both later superseded by the direct vector measurement (see "TCO drift"):
+- **thermal:** estimated here as ~0.5 µT/°C with apparent steepening above ~35 °C. Direct
+  measurement gives 0.73 µT/°C, linear; the steepening was an arctan artifact of viewing
+  offset drift through inclination.
+- **creep:** night baseline moved ~6.7 µT in three days, including through the flat-23 °C
+  overcast day — not thermal. Still open; see "Non-thermal walk".
 
 Why `magnoise` missed it: a horizontal disturbance projects onto the 71°-dipped field by
 only cos 71° ≈ 0.33, so |Bc| moves ~2 µT (just above the floor) while inclination swings
@@ -81,17 +155,17 @@ r ≈ 0 (inclination: 0.62 °/°C, r = 0.80). The only roll/pitch step all week 
 (0.3° trim change, someone stepping aboard) and inclination did not respond. So the drift
 is entirely on the magnetometer side.
 
-**Disturbance axis:** resting −3.5 µT on published y (toward the bow) with x, z ≈ 0;
-under heat it grows on that same axis to 6–16 µT. In chip terms that is the FXOS8700's
-**marked X channel**, negative direction, alone. Nothing external lies on that axis: the
-SH-ESP32 (inductor, pins, shield can) is 1 m away, the harness leaves perpendicular along
-+Y at milliamps, the mast step is on Z, and along ±X on the AGM01 there are only the
-FXAS21002 gyro (no magnetic material) and passives. A single-package-axis vector with the
-other two components at noise is the signature of a **per-axis internal offset drift in
-the FXOS8700 magnetometer (X channel)**: ~0.5 µT/°C, steepening above ~35 °C, plus a
-~2 µT/day walk. The load-step test (next steps, item 2) independently ruled out the
-SH-ESP32's inductor. Driver check: FXOS8700 magnetic sensor reset is enabled every cycle
-(`M_CTRL_REG2 m_rst_cnt = 00`), so the chip's own degauss is not enough.
+**Disturbance axis (superseded by the direct measurement above — retained because the
+geometry reasoning is still valid).** The back-solve suggested a single bow-axis vector;
+the vector data shows a fixed *diagonal* direction, (−0.75, +0.60, +0.29) in marked chip
+axes. What the geometry does establish is that no external source can account for it: the
+SH-ESP32 (inductor, pins, shield can) is 1 m away, the I2C harness leaves perpendicular
+along +Y carrying milliamps, the mast step is on Z, and the AGM01 itself carries only the
+FXAS21002 gyro (no magnetic material) and passives. Combined with the negative load-step
+test and an in-spec TCO_MAG of ±0.8 µT/°C, the drift is **internal to the FXOS8700
+magnetometer**. Driver check: magnetic sensor reset is enabled every cycle
+(`M_CTRL_REG2 m_rst_cnt = 00`), so the chip's own degauss is already active and does not
+remove it — as expected, since degauss cancels element hysteresis, not offset tempco.
 
 ## What `magnoise` actually is
 
@@ -221,32 +295,44 @@ Observed: +0.82 %/day while 2.86 → 3.99, +1.65 %/day while 4.05 → 7.97, then
    measured" gap if wanted; the FXOS8700's own offset tempco is now the leading explanation.
 3. **Publish the calibrated field vector** `Bc[x,y,z]` — **DONE, firmware v1.5.0
    (2026-09-02 07:06)**: `orientation.calibration.magfieldvector.{x,y,z}` at 1 Hz, flowing
-   to InfluxDB. First reading at the dock (26 °C): (0.9, 12.2, 45.8) µT — the resting
-   creep disturbance is ~−3.5 µT along sensor +y (the horizontal-field axis), nothing on x or
-   z. Analysis script: `analysis/calibration/magvector_vs_temp.py` (per-axis dB/dT from
+   to InfluxDB. This is what made the direct TCO measurement possible. Analysis script: `analysis/calibration/magvector_vs_temp.py` (per-axis dB/dT from
    live InfluxDB; needs > 3 °C of range).
 4. **Deviation analysis:** add `environment.inside.ecompass.temperature` as a covariate in
    the sailing-deviation fits and check the 08-12 / 08-26 sessions for temperature range;
    record the calibration's reference temperature in `CALIBRATION.md`.
-5. **Fix: replace the magnetometer chip.** The sensor is already on its own board on a
-   1 m lead, so isolation is not the issue — the FXOS8700 itself is. Choose a part that
-   removes offset by construction rather than by compensation: **MMC5983MA / MMC5603**
-   (AMR with SET/RESET on every measurement — element offset and its tempco cancel) or
-   **RM3100** (PNI magneto-inductive, no offset by principle; the marine/UAV standard).
-   Either needs a driver in `OrientationSensorFusion-ESP`'s sensor layer
-   (`driver_fxos8700.c` is the template; the FXOS8700 accel and FXAS21002 gyro can stay)
-   and a fresh calibration. Per-axis offset-vs-temperature correction of the FXOS8700 is
-   a stopgap for the thermal term only; it will not track the creep.
+5. **Clean unattended dock baseline (do this first — it decides the fix).** Several days
+   with the vector flowing and nobody aboard. Compare `Bc` at matched temperature across
+   days. If it repeats, the TCO is the whole story and item 6 suffices. If it walks, only
+   item 7 fixes it.
+6. **Two-point temperature calibration** — NXP's own recommendation for this part: collect
+   per-axis magnetic data at two temperatures along with the internal temperature reading,
+   then correct in firmware. We already log die temperature and `Bc`, so one diurnal cycle
+   is enough to fit it. No hardware change. Expected to remove most of the 0.73 µT/°C.
+7. **Replace the magnetometer** if the baseline walks (or if item 6 leaves too much
+   residual). Choose a part that removes offset by construction rather than by fitting:
+   **MMC5983MA / MMC5603** (AMR with SET/RESET each measurement — element offset and its
+   tempco cancel) or **RM3100** (PNI magneto-inductive, no offset by principle). Either
+   needs a driver in `OrientationSensorFusion-ESP`'s sensor layer (`driver_fxos8700.c` is
+   the template; the FXOS8700 accel and FXAS21002 gyro can stay) and a fresh calibration.
+   Note the FXOS8700CQ is EOL and not recommended for new designs, so this is coming
+   eventually regardless.
+8. **Bare-board A/B (optional, bounded value).** One un-potted AGM01 remains. Wiring it up
+   in the same place and orientation tests whether epoxy stress adds anything on top of the
+   intrinsic TCO. Expected result is "same drift" — 0.73 is already in spec — so this
+   converts a hypothesis into a measurement rather than being likely to change the plan.
+   Fingerprint to compare: d|B|/dT = −0.26 µT/°C, d(incl)/dT = +0.34 °/°C. No recalibration
+   needed: each chip has its own hard-iron offset so heading/inclination will read wrong,
+   but d`Bc`/dT is calibration-independent.
 
-**AC noise (priority 3):**
+**AC noise (priority 4):**
 
-6. **Firmware instrument:** per-axis 1-s standard deviation of `Bc` at 1 Hz, plus an
+9. **Firmware instrument:** per-axis 1-s standard deviation of `Bc` at 1 Hz, plus an
    on-demand ~2-s raw burst at full ODR via the existing port-80 API — axis gives the
    source direction, burst gives the frequency (60 Hz vs. a switcher).
-7. **Field checks during an elevated period:** unplug Morticia's shore cord for a minute;
+10. **Field checks during an elevated period:** unplug Morticia's shore cord for a minute;
    note which neighboring boats are occupied / running A/C.
-8. **Mitigation regardless of source:** read the magnetometer at the 200 Hz hybrid ODR and
+11. **Mitigation regardless of source:** read the magnetometer at the 200 Hz hybrid ODR and
    average 5 samples per 40 Hz fusion cycle (~4× attenuation of 60 Hz). Do this only after
-   at least one elevated period has been captured with item 6.
-9. Re-run the sample-distribution check after any change; at-floor fraction and histogram
+   at least one elevated period has been captured with item 9.
+12. Re-run the sample-distribution check after any change; at-floor fraction and histogram
    mode are the two numbers to watch.
