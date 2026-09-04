@@ -34,6 +34,82 @@ here because the retracted claims were confident and drove work):
 `~/bin/fluxq "<flux>"` on `halos` (reads the token from the `signalk-to-influxdb2` plugin
 config). Analysis script: `analysis/calibration/magvector_vs_temp.py`.
 
+## Onboard auto-calibration cannot run on the boat (2026-09-04)
+
+`fRunMagCalibration` needs 110 populated buffer bins for the 4-element solver, 330 for the
+10-element solver currently in use (`MINMEASUREMENTS*CAL`, `magnetic.h`). The buffer
+(`iUpdateMagBuffer`) bins samples by the **direction** of the field vector in the sensor
+frame — 14 × 28 = 392 bins over the sphere.
+
+Replaying that algorithm against the real 2026-09-02 sail data: the field direction stayed
+within **5–35° of the sensor's +z axis** for the whole sail, visiting **~25 distinct
+direction bins**. That cap is ~9% of the sphere, i.e. ~36 bins even with perfect coverage
+inside it. Cause is geometry: at 71° dip the field is nearly vertical, so yaw sweeps a
+narrow cone rather than tumbling the sensor; ±19° of heel widens it slightly.
+
+The replay does creep to ~110 via the case-4 fallback (readings > 5 µT from every stored
+entry get slotted into arbitrary empty bins), but those points still lie inside the 35° cap,
+so any sphere fit is ill-conditioned, produces a large fit error, and fails the adoption
+test (needs ≤ `fFitErrorpc`). Matches observation: a full sail with heading variation
+produced no adoption, only aging.
+
+**Consequences.** Nothing onboard tracks the hard-iron walk. A pre-race 360° yaw swing
+cannot trigger adoption. Recalibration requires physically tumbling the sensor. The open
+"gate/disable auto-recal" TODO is moot — it effectively never runs.
+
+## Swing calibration prototype (2026-09-04)
+
+Script: `analysis/calibration/swing_calibration_prototype.py`. Idea: we cannot solve the 3D
+ellipsoid, but heading needs only the horizontal projection, and the boat yaws freely — so
+fit a circle/ellipse to tilt-compensated horizontal components (the classic compass swing).
+
+Scored against the fluxgate on the 2026-09-02 sail (4 h, all 12 heading sectors covered —
+a normal sail already provides a full swing, no dedicated motoring circle needed):
+
+| treatment | residual hard iron | heading scatter (1σ) |
+|---|---|---|
+| raw `Bc` | 8.27 µT | 16.0° |
+| **TCO correction only** | 1.66 µT | **8.5°** |
+| TCO + circle fit (3-param) | — | 10.4° |
+| TCO + ellipse fit (5-param) | — | 9.3° |
+
+Two independent confirmations of the TCO model here: coefficients derived from 9/3 dock data
+transfer to a different day, 30–38 °C, under heel; and the circle fit on *raw* data
+independently recovers 8.27 µT of offset where the TCO model predicts 0.76 µT/°C × ~12 °C
+≈ 9 µT. Hold-out test: fitting TCO on 9/3 excursion 1 alone and applying to excursion 2
+drops per-axis scatter from [0.93, 1.13, 0.47] to [0.34, 0.22, 0.32] µT.
+
+**The swing fit adds nothing on top of TCO, and this is informative.** Sector-balanced
+fitting (median per 10° bin, 35/36 bins populated) did not change it. After TCO the residual
+is not a hard-iron circle offset: by heading octant the error is deterministic
+(−7.8, −6.7, −1.0, +11.8, +14.3, +16.3, +1.9, −3.8°) with only 4–7° of scatter *within*
+each octant — a ~24° peak-to-peak deviation curve.
+
+**Confound that blocks further deviation work:** the fluxgate is not absolute truth. It is
+deployed with mounting offset 0 and its own deviation has never been characterized, so the
+octant pattern is the *difference* between two uncalibrated compasses and cannot be
+attributed to either. An absolute reference is required — GPS COG on a steady motoring
+circle in calm conditions is the practical option.
+
+Also resolved: an apparent "inflated radius" (fit R ≈ 19.2 vs an expected 16.3 µT) was an
+arithmetic error on my part — 16.3 came from dock-night values, but during the sail the
+TCO-corrected readings give |B| = 53.2 and incl = 69.0°, so the true horizontal is 19.1 µT.
+The fit was correct. Heel does not systematically corrupt it (R stable 18–19 µT across heel
+bins). A real 7% ellipticity remains (semi-axes 18.75 / 20.05 µT) — residual soft iron,
+worth ~2° of heading.
+
+## Walk vs. relaxation: still undecided (2026-09-04)
+
+With 1.31 days of clean unattended dock data, a linear walk (+3.93 µT/day, residual
+0.373 µT) and an exponential relaxation (τ = 3.8 d, amplitude 17.7 µT, residual 0.367 µT)
+fit equally well. The drift-direction projection is still climbing every 6 h
+(+0.3, +1.4, +2.0, +3.6, +4.2, +4.7 µT) with no visible flattening. Needs about a week to
+separate. This still decides compensate-vs-replace: a relaxation settles, a walk does not.
+
+Tension worth holding onto: the 9/2 swing fit found only 1.66 µT of residual hard iron after
+TCO correction, which is hard to reconcile with an unbounded 4 µT/day walk since the last
+calibration. That mildly favours the relaxation reading.
+
 ## TCO drift: the measurement (2026-09-02, full diurnal cycle)
 
 Firmware v1.5.0 publishes the calibrated vector `Bc[x,y,z]` at 1 Hz, so the drift is now
