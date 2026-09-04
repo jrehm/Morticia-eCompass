@@ -179,6 +179,38 @@ static constexpr float kThermalRefTempKDefault = 303.55f;
 static float g_thermal_slope_rad_per_k = kThermalSlopeRadPerKDefault;
 static float g_thermal_ref_temp_k = kThermalRefTempKDefault;
 
+// ---- Vector-domain magnetometer TCO compensation (Phase 2a) ----
+// The FXOS8700's zero-flux offset drifts with temperature along a fixed
+// direction in the sensor frame. Measured 2026-09-03 over two up/down
+// temperature excursions at the dock (which decorrelate temperature from
+// time): 0.76 uT/degC total, linear (r = -0.96), 0.1-0.4 uT hysteresis.
+// Datasheet TCO_MAG is +/-0.8 uT/degC typ, so the part is IN SPEC -- it is
+// simply not a precision compass sensor across a 17 degC swing.
+//
+// This SUPERSEDES the heading-domain scalar above, which is structurally the
+// wrong model: a vector offset produces a heading error ~asin(|d|.sin(h-phi)/H),
+// i.e. sinusoidal in heading, so one scalar can only ever be right at one
+// heading. Validated out-of-sample on the 2026-09-02 sail: applying these
+// coefficients cut heading scatter vs the fluxgate from 16.0 to 8.5 deg.
+// See analysis/calibration/magnoise_diagnostic_summary_20260901.md.
+//
+// PHASE 2A SCOPE: observation only. These feed the new magfieldvectortc.*
+// and headingMagneticTC paths; they do NOT feed the fusion, so
+// headingCompass/headingMagnetic are unaffected. Moving the correction into
+// processMagData() (so the Kalman filter sees corrected data) is Phase 2b.
+//
+// Coefficients are in the PUBLISHED vector frame (x=starboard, y=astern,
+// z=down), uT/degC. NVS-backed, updated via POST /api/magtco/config.
+static constexpr float kMagTcoAlphaXDefault = -0.484f;
+static constexpr float kMagTcoAlphaYDefault = -0.557f;
+static constexpr float kMagTcoAlphaZDefault = -0.247f;
+static constexpr float kMagTcoTrefCDefault  = 23.0f;
+static float g_mag_tco_alpha_x = kMagTcoAlphaXDefault;
+static float g_mag_tco_alpha_y = kMagTcoAlphaYDefault;
+static float g_mag_tco_alpha_z = kMagTcoAlphaZDefault;
+static float g_mag_tco_tref_c  = kMagTcoTrefCDefault;
+static bool  g_mag_tco_enabled = true;
+
 // Full-charge detector state — file scope (not a local static in setup())
 // so /api/battery/config can report live detector status. See
 // docs/battery-soc-persistence-handoff.md for the dwell-time design.
@@ -257,6 +289,23 @@ void setup() {
   ESP_LOGI(TAG, "Thermal compensation: slope %.6f rad/K, T_ref %.2f K",
            g_thermal_slope_rad_per_k, g_thermal_ref_temp_k);
 
+  // Load NVS-backed vector-domain magnetometer TCO coefficients (Phase 2a).
+  // Observation-only: these drive magfieldvectortc.* and headingMagneticTC,
+  // not the fusion. Updated via POST /api/magtco/config.
+  {
+    Preferences prefs;
+    prefs.begin("magtco", true);
+    g_mag_tco_alpha_x = prefs.getFloat("ax", kMagTcoAlphaXDefault);
+    g_mag_tco_alpha_y = prefs.getFloat("ay", kMagTcoAlphaYDefault);
+    g_mag_tco_alpha_z = prefs.getFloat("az", kMagTcoAlphaZDefault);
+    g_mag_tco_tref_c  = prefs.getFloat("tref_c", kMagTcoTrefCDefault);
+    g_mag_tco_enabled = prefs.getBool("enabled", true);
+    prefs.end();
+  }
+  ESP_LOGI(TAG, "Mag TCO (observation only): %s alpha=(%.3f, %.3f, %.3f) uT/C, T_ref %.2f C",
+           g_mag_tco_enabled ? "ON" : "OFF", g_mag_tco_alpha_x,
+           g_mag_tco_alpha_y, g_mag_tco_alpha_z, g_mag_tco_tref_c);
+
   // Build SensESP Application
   SensESPAppBuilder builder;
   sensesp_app = (&builder)
@@ -333,6 +382,13 @@ void setup() {
   const char* kSKPathMagFieldVectorX = "orientation.calibration.magfieldvector.x";
   const char* kSKPathMagFieldVectorY = "orientation.calibration.magfieldvector.y";
   const char* kSKPathMagFieldVectorZ = "orientation.calibration.magfieldvector.z";
+  // Phase 2a — temperature-compensated vector and heading. Additive: the
+  // uncompensated magfieldvector.* paths above keep their exact meaning so
+  // the multi-day hard-iron walk baseline stays in one continuous basis.
+  const char* kSKPathMagFieldVectorTCX = "orientation.calibration.magfieldvectortc.x";
+  const char* kSKPathMagFieldVectorTCY = "orientation.calibration.magfieldvectortc.y";
+  const char* kSKPathMagFieldVectorTCZ = "orientation.calibration.magfieldvectortc.z";
+  const char* kSKPathHeadingMagneticTC = "sensors.ecompass.headingMagneticTC";
   const char* kSKPathMagCalEventFit      = "orientation.calibration.lastcaleventfitdeltapct";
   const char* kSKPathMagCalEventHeading  = "orientation.calibration.lastcaleventheadingdeltadeg";
   const char* kSKPathTemperature     = "environment.inside.ecompass.temperature";
@@ -510,6 +566,76 @@ void setup() {
       });
   sensesp_app->get_http_server()->add_handler(thermal_config_post_handler);
 
+  // HTTP endpoints for the Phase 2a vector-domain mag TCO coefficients.
+  //   GET  http://192.168.8.214/api/magtco/config
+  //   POST http://192.168.8.214/api/magtco/config
+  //        {"alpha_x":-0.484,"alpha_y":-0.557,"alpha_z":-0.247,
+  //         "tref_c":23.0,"enabled":true}
+  // Any subset of fields may be sent; omitted fields keep their current value.
+  // NVS-backed, so changes survive reboot. Setting "enabled":false makes the
+  // TC paths equal the uncompensated ones (correction term goes to zero),
+  // which is the quickest way to A/B the model without a reflash.
+  auto magtco_config_get_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_GET, "/api/magtco/config",
+      [](httpd_req_t* req) {
+        char resp[220];
+        snprintf(resp, sizeof(resp),
+                 "{\"alpha_x\":%.4f,\"alpha_y\":%.4f,\"alpha_z\":%.4f,"
+                 "\"tref_c\":%.3f,\"enabled\":%s,\"feeds_fusion\":false}",
+                 g_mag_tco_alpha_x, g_mag_tco_alpha_y, g_mag_tco_alpha_z,
+                 g_mag_tco_tref_c, g_mag_tco_enabled ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(magtco_config_get_handler);
+
+  auto magtco_config_post_handler = std::make_shared<HTTPRequestHandler>(
+      1 << HTTP_POST, "/api/magtco/config",
+      [](httpd_req_t* req) {
+        char buf[256];
+        int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+        if (len <= 0) {
+          httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "empty body");
+          return ESP_FAIL;
+        }
+        buf[len] = '\0';
+        JsonDocument doc;
+        if (deserializeJson(doc, buf)) {
+          httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad JSON");
+          return ESP_FAIL;
+        }
+        g_mag_tco_alpha_x = doc["alpha_x"] | g_mag_tco_alpha_x;
+        g_mag_tco_alpha_y = doc["alpha_y"] | g_mag_tco_alpha_y;
+        g_mag_tco_alpha_z = doc["alpha_z"] | g_mag_tco_alpha_z;
+        g_mag_tco_tref_c  = doc["tref_c"]  | g_mag_tco_tref_c;
+        g_mag_tco_enabled = doc["enabled"] | g_mag_tco_enabled;
+
+        Preferences prefs;
+        prefs.begin("magtco", false);
+        prefs.putFloat("ax", g_mag_tco_alpha_x);
+        prefs.putFloat("ay", g_mag_tco_alpha_y);
+        prefs.putFloat("az", g_mag_tco_alpha_z);
+        prefs.putFloat("tref_c", g_mag_tco_tref_c);
+        prefs.putBool("enabled", g_mag_tco_enabled);
+        prefs.end();
+
+        ESP_LOGI(TAG, "Mag TCO updated: %s alpha=(%.3f, %.3f, %.3f) T_ref %.2f C",
+                 g_mag_tco_enabled ? "ON" : "OFF", g_mag_tco_alpha_x,
+                 g_mag_tco_alpha_y, g_mag_tco_alpha_z, g_mag_tco_tref_c);
+
+        char resp[220];
+        snprintf(resp, sizeof(resp),
+                 "{\"alpha_x\":%.4f,\"alpha_y\":%.4f,\"alpha_z\":%.4f,"
+                 "\"tref_c\":%.3f,\"enabled\":%s,\"saved\":true}",
+                 g_mag_tco_alpha_x, g_mag_tco_alpha_y, g_mag_tco_alpha_z,
+                 g_mag_tco_tref_c, g_mag_tco_enabled ? "true" : "false");
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_send(req, resp, strlen(resp));
+        return ESP_OK;
+      });
+  sensesp_app->get_http_server()->add_handler(magtco_config_post_handler);
+
   // ========== ATTITUDE (yaw, pitch, roll) ==========
   auto* sensor_roll = new OrientationValues(
       orientation_sensor, OrientationValues::kRoll);
@@ -674,7 +800,7 @@ void setup() {
   auto magfieldvector_x_metadata = std::make_shared<SKMetadata>();
   magfieldvector_x_metadata->units_ = "uT";
   magfieldvector_x_metadata->description_ =
-      "Calibrated geomagnetic field vector, bow-axis (X) component";
+      "Calibrated geomagnetic field vector, starboard-axis (X) component";
   magfieldvector_x_metadata->display_name_ = "Mag Field Bc X";
   magfieldvector_x_metadata->short_name_ = "BcX";
   auto magfieldvector_x_output = std::make_shared<SKOutput<float>>(
@@ -688,7 +814,7 @@ void setup() {
   auto magfieldvector_y_metadata = std::make_shared<SKMetadata>();
   magfieldvector_y_metadata->units_ = "uT";
   magfieldvector_y_metadata->description_ =
-      "Calibrated geomagnetic field vector, starboard-axis (Y) component";
+      "Calibrated geomagnetic field vector, astern-axis (Y) component";
   magfieldvector_y_metadata->display_name_ = "Mag Field Bc Y";
   magfieldvector_y_metadata->short_name_ = "BcY";
   auto magfieldvector_y_output = std::make_shared<SKOutput<float>>(
@@ -708,6 +834,93 @@ void setup() {
   auto magfieldvector_z_output = std::make_shared<SKOutput<float>>(
       kSKPathMagFieldVectorZ, kConfigPathNone, magfieldvector_z_metadata);
   magfieldvector_z->connect_to(magfieldvector_z_output);
+
+  // ========== TEMPERATURE-COMPENSATED MAG VECTOR + HEADING (Phase 2a) ==========
+  // Purely additive observation paths. Nothing here feeds the fusion, so
+  // headingCompass / headingMagnetic / attitude are byte-for-byte unaffected;
+  // if the model is wrong these paths just publish nonsense and are ignored.
+  //
+  // Correction: Bc_tc[i] = Bc[i] - alpha[i] * (T - T_ref), applied in the
+  // published frame (x=starboard, y=astern, z=down).
+  //
+  // Heading: rotate into the usual body frame (forward, right, down) =
+  // (-y, x, z), tilt-compensate with the fusion's roll/pitch (gyro-stabilised,
+  // and the accelerometer is clean -- 0.002 deg/degC), then
+  // heading = atan2(-Yh, Xh). This is exactly the computation validated
+  // offline against motoring GPS COG on 2026-09-02, where it scored 8.1 deg
+  // sd vs the fluxgate's 13.1 deg.
+  //
+  // NOTE: no mounting offset is applied. Offline this formula landed within
+  // ~0.5 deg of magnetic COG with zero offset, but that is one dataset -- trim
+  // via /sensors/hdg/tc_offset once there is live data to fit against. The
+  // existing -15 deg mounting offset belongs to the fusion's yaw output, which
+  // uses a different frame convention; do NOT reuse it here.
+  auto mag_tc_vector = [orientation_sensor](int axis) -> float {
+    auto* si = orientation_sensor->sensor_interface_;
+    float d_t = g_mag_tco_enabled ? (si->GetTemperatureC() - g_mag_tco_tref_c) : 0.0f;
+    switch (axis) {
+      case 0: return si->GetMagneticBcX() - g_mag_tco_alpha_x * d_t;
+      case 1: return si->GetMagneticBcY() - g_mag_tco_alpha_y * d_t;
+      default: return si->GetMagneticBcZ() - g_mag_tco_alpha_z * d_t;
+    }
+  };
+
+  struct TcAxis { const char* path; const char* desc; const char* disp; const char* shrt; int idx; };
+  const TcAxis kTcAxes[] = {
+    {kSKPathMagFieldVectorTCX, "Temperature-compensated field vector, starboard (X)", "Mag Field BcTC X", "BcTCX", 0},
+    {kSKPathMagFieldVectorTCY, "Temperature-compensated field vector, astern (Y)",    "Mag Field BcTC Y", "BcTCY", 1},
+    {kSKPathMagFieldVectorTCZ, "Temperature-compensated field vector, down (Z)",      "Mag Field BcTC Z", "BcTCZ", 2},
+  };
+  for (const auto& ax : kTcAxes) {
+    auto sensor = std::make_shared<RepeatSensor<float>>(
+        MAG_VECTOR_REPORTING_INTERVAL_MS,
+        [mag_tc_vector, ax]() { return mag_tc_vector(ax.idx); });
+    auto meta = std::make_shared<SKMetadata>();
+    meta->units_ = "uT";
+    meta->description_ = ax.desc;
+    meta->display_name_ = ax.disp;
+    meta->short_name_ = ax.shrt;
+    sensor->connect_to(std::make_shared<SKOutput<float>>(ax.path, kConfigPathNone, meta));
+  }
+
+  auto heading_tc = std::make_shared<RepeatSensor<float>>(
+      ORIENTATION_REPORTING_INTERVAL_MS,
+      [mag_tc_vector, sensor_roll, sensor_pitch]() -> float {
+        const float bx = mag_tc_vector(0);   // starboard
+        const float by = mag_tc_vector(1);   // astern
+        const float bz = mag_tc_vector(2);   // down
+        const float bf = -by, br = bx, bd = bz;   // forward, right, down
+        const float roll = sensor_roll->ReportValue();
+        const float pitch = sensor_pitch->ReportValue();
+        const float sr = sinf(roll), cr = cosf(roll);
+        const float sp = sinf(pitch), cp = cosf(pitch);
+        const float xh = bf * cp + br * sp * sr + bd * sp * cr;
+        const float yh = br * cr - bd * sr;
+        float h = atan2f(-yh, xh);
+        if (h < 0.0f) h += 2.0f * (float)PI;
+        return h;
+      });
+
+  const char* kConfigPathTcOffset = "/sensors/hdg/tc_offset";
+  auto* tcMountingOffset = new AngleCorrection(0.0, 0.0, kConfigPathTcOffset);
+  ConfigItem(tcMountingOffset)
+      ->set_title("TC Heading Offset")
+      ->set_description("Mounting/frame offset for the temperature-compensated "
+                        "heading (radians). Independent of the fusion's "
+                        "Mounting Offset — different frame convention.")
+      ->set_sort_order(410);
+
+  auto heading_tc_metadata = std::make_shared<SKMetadata>();
+  heading_tc_metadata->units_ = "rad";
+  heading_tc_metadata->description_ =
+      "eCompass magnetic heading, vector-domain temperature-compensated "
+      "(Phase 2a, observation only — does not feed the fusion)";
+  heading_tc_metadata->display_name_ = "eCompass Heading TC";
+  heading_tc_metadata->short_name_ = "HDGmTC";
+  heading_tc->connect_to(tcMountingOffset)
+      ->connect_to(std::make_shared<SKOutput<float>>(
+          kSKPathHeadingMagneticTC, kConfigPathNone, heading_tc_metadata));
+
 
   // ========== MAG CAL CHANGE DETECTOR ==========
   // Watches magfit (the in-use fit error) for any single-interval change
