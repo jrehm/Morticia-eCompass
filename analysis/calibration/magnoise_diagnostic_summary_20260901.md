@@ -17,6 +17,18 @@
 
 **Corrections to earlier revisions of this document** (git history has the originals; stated
 here because the retracted claims were confident and drove work):
+- *"Marked chip axes are +X = stern, +Y = port, +Z = up"* (and the derived mapping
+  `published = (−Y, +X, −Z)_marked`). **Wrong — and provably so.** That mapping has
+  determinant −1, i.e. a reflection, which no physical mounting can produce; it also fails
+  the cross-product check, since X × Y with X = stern and Y = port gives *down*, not up, on
+  a component-side-up board. Jeff caught it on 2026-09-04. The board is mounted with the J3
+  row toward the bow, giving marked **+X = bow, +Y = port, +Z = up** and
+  `published = (−Y, −X, −Z)_marked` (determinant +1). **Nothing downstream changes:** the
+  published frame was derived from the measured field rather than the silkscreen, the TCO
+  coefficients are both measured and applied in the published frame, and the drift's
+  physical direction (bow / port / up) and diagonality are frame-independent. Only the
+  chip-axis *labels* were wrong. Lesson: run the determinant check on any frame claim —
+  it is cheap and catches exactly this class of error.
 - *"Drift is confined to the chip's marked X channel."* **Wrong.** It was back-solved from
   two observables (inclination, heading error) for a three-component vector, closed by
   assuming |Bc| = 48.09 and no vertical component. The direct vector measurement falsifies
@@ -165,19 +177,21 @@ Both quantities are invariant to the 6° mooring swing between segments, and two
 windows agree to 4%. Hysteresis on the rising vs. falling ramp is 0.1–0.4 µT — the effect is
 reversible, not creep.
 
-**Drift vector.** Relative to the coolest point of segment A, the unit direction in the
-chip's *marked* axes holds steady while the magnitude scales with temperature:
+**Drift vector.** Relative to the coolest point of segment A, the unit direction holds
+steady while the magnitude scales with temperature. Given in **physical** terms, which are
+frame-independent (marked-axis labels were corrected 2026-09-04, see below):
 
-| point | T | \|d\| | unit (Xm, Ym, Zm) |
+| point | T | \|d\| | unit (bow, port, up) |
 |---|---|---|---|
-| A 09:30 | 30.2 °C | 3.03 µT | (−0.76, +0.65, +0.08) |
-| A 11:00 | 37.0 °C | 8.02 µT | (−0.75, +0.61, +0.26) |
-| A 12:30 | 40.3 °C | 10.47 µT | (−0.74, +0.60, +0.30) |
-| A 15:00 | 39.1 °C | 7.15 µT | (−0.76, +0.56, +0.32) |
+| A 09:30 | 30.2 °C | 3.03 µT | (+0.76, +0.65, +0.08) |
+| A 11:00 | 37.0 °C | 8.02 µT | (+0.75, +0.61, +0.26) |
+| A 12:30 | 40.3 °C | 10.47 µT | (+0.74, +0.60, +0.30) |
+| A 15:00 | 39.1 °C | 7.15 µT | (+0.76, +0.56, +0.32) |
 
-Total 0.73 µT/°C; per marked axis ≈ (−0.55, +0.44, +0.21) µT/°C. A fixed diagonal direction
-with all three channels participating is exactly what three independent per-axis offset
-tempcos produce.
+Total 0.73 µT/°C, pointing **toward the bow, to port, and up**. With the board mounted
+component-side up, J3 toward the bow (marked +X = bow, +Y = port, +Z = up), that is
+(+0.72, +0.62, +0.32) in marked chip axes — a fixed diagonal direction with all three
+channels participating, exactly what three independent per-axis offset tempcos produce.
 
 **Datasheet check** (FXOS8700CQ Rev. 8, Table 4, magnetometer magnetic characteristics):
 
@@ -258,14 +272,17 @@ Separating sensor offset from a nearby magnet needs physical tests (see "Next st
 
 **Mounting facts (Jeff, 2026-09-02):** the magnetometer is an NXP **BRKT-STBC-AGM01**
 breakout (FXOS8700 + FXAS21002), potted in epoxy, taped component-side up to a CF cross
-member immediately aft of the daggerboard trunk. J3 row runs fore-aft; marked +Y → port,
-so marked +X → stern, +Z → up. I2C/power soldered to the J4-side pads, twisted pairs, led
+member immediately aft of the daggerboard trunk. **J3 row points toward the bow**, so
+marked +X → bow, +Y → port, +Z → up. I2C/power soldered to the J4-side pads, twisted pairs, led
 away along +Y (port) across the cross member, down the hull side, to the SH-ESP32 **~1 m
 below**. Hull entirely CF; the only metal nearby is the stainless mast step 20–25 cm
 directly above (on the Z axis).
 
-**Published vector frame:** (x, y, z)_published = (−Y, +X, −Z)_marked = (starboard,
-astern, down). Verified from the dock field (see README).
+**Published vector frame:** (x, y, z)_published = (−Y, −X, −Z)_marked = (starboard,
+astern, down). The published frame is verified directly from the dock field and does not
+depend on reading the silkscreen; the marked-axis mapping was corrected 2026-09-04 (the
+earlier (−Y, +X, −Z) had determinant −1, i.e. a reflection — physically impossible). See
+README for the determinant check.
 
 **Accelerometer is clean:** hourly mean roll/pitch vs. die temperature: slope 0.002 °/°C,
 r ≈ 0 (inclination: 0.62 °/°C, r = 0.80). The only roll/pitch step all week is 08-29 08:00
@@ -274,8 +291,8 @@ is entirely on the magnetometer side.
 
 **Disturbance axis (superseded by the direct measurement above — retained because the
 geometry reasoning is still valid).** The back-solve suggested a single bow-axis vector;
-the vector data shows a fixed *diagonal* direction, (−0.75, +0.60, +0.29) in marked chip
-axes. What the geometry does establish is that no external source can account for it: the
+the vector data shows a fixed *diagonal* direction — physically toward bow/port/up,
+i.e. (+0.72, +0.62, +0.32) in marked chip axes. What the geometry does establish is that no external source can account for it: the
 SH-ESP32 (inductor, pins, shield can) is 1 m away, the I2C harness leaves perpendicular
 along +Y carrying milliamps, the mast step is on Z, and the AGM01 itself carries only the
 FXAS21002 gyro (no magnetic material) and passives. Combined with the negative load-step

@@ -268,13 +268,35 @@ the new source. (History: patching only `shesp32/` and forgetting
 `shesp32_ota/` compiles fine for USB but breaks OTA builds — cost a session on
 2026-08-12. The script exists so that cannot recur.)
 
-**Frame of the published vector (verified against the dock field, 2026-09-02):**
-the vector is in the library's remapped body frame, **not** the chip's marked
-axes and not bow/starboard/down. With the AGM01 mounted component-side up,
-J3 row fore-aft, marked +Y toward port (so marked +X toward the stern, +Z up),
-the published axes are `x = starboard, y = astern, z = down` — i.e.
-`(x, y, z)_published = (−Y, +X, −Z)_marked`. Check: at heading 190° the field
-reads (0.9, 12.2, 45.8) µT — horizontal component astern on +y, dip down on +z.
+**Frame of the published vector (verified against the dock field, 2026-09-02;
+marked-axis mapping corrected 2026-09-04):**
+
+The published vector is in the library's remapped body frame:
+`x = starboard, y = astern, z = down`. This is derived purely from the measured
+field and the boat's heading and does **not** depend on reading the silkscreen:
+at heading 190° the field reads (0.9, 12.2, 45.8) µT — horizontal component
+astern on +y, dip down on +z, which matches the predicted (2.8, 15.8, 45.3) for
+this location.
+
+**Mounting / marked chip axes.** The AGM01 is mounted component-side up with the
+J3 pin row toward the bow, giving marked **+X = bow, +Y = port, +Z = up**. So
+
+    (x, y, z)_published = (−Y, −X, −Z)_marked
+
+**Sanity check any frame claim with the determinant.** Write the published axes
+as rows in marked coordinates and take the determinant: `+1` is a proper
+rotation (physically realisable), `−1` is a reflection and therefore wrong no
+matter how plausible the silkscreen reading looked. The mapping above gives
+`+1`. An earlier revision of this file claimed marked `+X = stern, +Y = port,
++Z = up`; that gives `−1`, and is independently impossible because
+X × Y = (−forward) × (port) = **down**, contradicting +Z = up on a
+component-side-up board. Equivalent cross-product check for the correct frame:
+X × Y = forward × port = up = +Z. ✓
+
+Note this mapping affects only how the vector is described relative to the
+*board*. It does not affect the TCO coefficients or the firmware, which are
+both measured and applied in the published frame.
+
 See `analysis/calibration/magnoise_diagnostic_summary_20260901.md`.
 
 ## Known Upgrade Issues
