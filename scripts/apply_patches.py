@@ -34,7 +34,14 @@ EXIT CODES
 import os
 import sys
 
-PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _default_project_dir():
+    """Project root. NOTE: PlatformIO exec()s pre-scripts via SCons without
+    defining __file__, so this must not assume it exists."""
+    try:
+        return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    except NameError:
+        return os.getcwd()
 
 # Each patch: library-relative file path, a marker used to detect "already
 # applied", an anchor line that must match exactly once, and the text inserted
@@ -121,8 +128,8 @@ def apply_to_env(libdeps_env_dir, env_name, log=print):
     return applied, present, errors
 
 
-def run(env_names, log=print):
-    libdeps_root = os.path.join(PROJECT_DIR, ".pio", "libdeps")
+def run(env_names, log=print, project_dir=None):
+    libdeps_root = os.path.join(project_dir or _default_project_dir(), ".pio", "libdeps")
     if not os.path.isdir(libdeps_root):
         log("apply_patches: no .pio/libdeps yet (first build?) — nothing to patch")
         return 0
@@ -158,8 +165,9 @@ except NameError:
     pass
 else:
     _pioenv = env.subst("$PIOENV")  # noqa: F821
+    _projdir = env.subst("$PROJECT_DIR")  # noqa: F821
     print(f"apply_patches: pre-build check for env '{_pioenv}'")
-    if run([_pioenv]) != 0:
+    if run([_pioenv], project_dir=_projdir) != 0:
         raise SystemExit("apply_patches: refusing to build with missing/failed patches")
 
 if __name__ == "__main__":
