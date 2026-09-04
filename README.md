@@ -237,79 +237,36 @@ Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
 
 ## Local Library Patches
 
-This project requires patches to two vendored libraries. Both are lost on
-`pio run --target clean` or any library upgrade and **must be reapplied
-manually** before the project will compile — a plain `pio run` has also been
-observed to wipe them (not just `--target clean`), so re-check before
-assuming a build failure is a real regression.
+Two vendored libraries need local patches to expose members their upstream APIs
+keep private. **These are applied automatically** by `scripts/apply_patches.py`,
+wired in as a PlatformIO pre-build hook (`extra_scripts` in `platformio.ini`).
+The script is idempotent, covers every env's independent `.pio/libdeps/` copy,
+and **aborts the build** if an anchor is missing rather than letting the compile
+fail later with an obscure access error.
 
-### SensESP
+You should not need to do anything. To verify or repair without building:
 
-**Files (apply to BOTH — `shesp32` and `shesp32_ota` are separate
-PlatformIO envs with independent `.pio/libdeps/` copies of SensESP):**
-- `.pio/libdeps/shesp32/SensESP/src/sensesp_app.h`
-- `.pio/libdeps/shesp32_ota/SensESP/src/sensesp_app.h`
-
-Add with the other public getters (after `get_sk_delta()`):
-```cpp
-// LOCAL PATCH — expose HTTP server for custom endpoints.
-std::shared_ptr<HTTPServer> get_http_server() { return this->http_server_; }
+```sh
+python3 scripts/apply_patches.py            # all envs present in .pio/libdeps
+python3 scripts/apply_patches.py shesp32_ota
 ```
 
-SensESP 3.3.x/3.4.x keep `http_server_` protected with no public accessor
-(confirmed still true as of 3.4.0). This one-line patch restores access so
-`/api/battery/set-full` and `/api/calibration/save-mag` can be registered on
-the primary HTTP server.
+The patches are:
 
-(Learned the hard way 2026-08-12: patching only `shesp32/` and forgetting
-`shesp32_ota/` compiles fine for USB builds but fails OTA uploads with
-`'get_http_server' ... not accessible from this context`.)
+1. **SensESP** `src/sensesp_app.h` — add a public `get_http_server()`.
+   SensESP 3.3.x–3.5.x keep `http_server_` protected with no accessor; the
+   custom `/api/*` handlers in `main.cpp` need it.
+2. **OrientationSensorFusion-ESP** `src/sensor_fusion_class.{h,cc}` — add
+   `GetMagneticBcX/Y/Z()`. Upstream exposes field *magnitude* and inclination
+   but no vector accessor; `sfg_->Mag.fBc[]` is the per-cycle calibrated
+   (hard-/soft-iron corrected) field vector from `conditionSensorReadings()`.
+   Published as `orientation.calibration.magfieldvector.{x,y,z}`.
 
-### OrientationSensorFusion-ESP
-
-**Files (apply to BOTH — `shesp32` and `shesp32_ota` have independent
-`.pio/libdeps/` copies):**
-- `.pio/libdeps/shesp32/OrientationSensorFusion-ESP/src/sensor_fusion_class.h`
-- `.pio/libdeps/shesp32/OrientationSensorFusion-ESP/src/sensor_fusion_class.cc`
-- `.pio/libdeps/shesp32_ota/OrientationSensorFusion-ESP/src/sensor_fusion_class.h`
-- `.pio/libdeps/shesp32_ota/OrientationSensorFusion-ESP/src/sensor_fusion_class.cc`
-
-Add to the header, with the other `GetMagnetic*` public getters (after
-`GetMagneticBMagTrial()`):
-```cpp
-// LOCAL PATCH — expose the calibrated field vector (uT) for the DC
-// hard-iron drift and magnoise-direction investigations. See TODO.md
-// "eCompass DC Hard-Iron Drift" / handoffs/magnoise-instrumentation.md.
-float GetMagneticBcX(void);
-float GetMagneticBcY(void);
-float GetMagneticBcZ(void);
-```
-
-Add to the `.cc`, after `GetMagneticBMag()`:
-```cpp
-float SensorFusion::GetMagneticBcX(void) {
-  return sfg_->Mag.fBc[CHX];
-}  // end GetMagneticBcX()
-
-float SensorFusion::GetMagneticBcY(void) {
-  return sfg_->Mag.fBc[CHY];
-}  // end GetMagneticBcY()
-
-float SensorFusion::GetMagneticBcZ(void) {
-  return sfg_->Mag.fBc[CHZ];
-}  // end GetMagneticBcZ()
-```
-
-`sfg_` (the library's internal `SensorFusionGlobals*`) is private to
-`SensorFusion`, and the upstream class exposes field *magnitude*
-(`GetMagneticBMag()`) and inclination but no vector accessor — `sfg_->Mag.fBc[]`
-is the per-cycle calibrated (soft-/hard-iron corrected) field vector computed
-in `conditionSensorReadings()`. This patch restores access so `main.cpp` can
-publish `orientation.calibration.magfieldvector.{x,y,z}` at 1 Hz by calling
-`orientation_sensor->sensor_interface_->GetMagneticBcX()` etc. directly
-(SignalK-Orientation's `OrientationValues` wrapper is untouched — it has no
-vector-typed output, only scalar `OrientationValType`s, so these calls bypass
-it rather than extending it).
+If a library upgrade moves the anchors, the script prints the anchor it could
+not find and stops — rewrite that patch in `scripts/apply_patches.py` against
+the new source. (History: patching only `shesp32/` and forgetting
+`shesp32_ota/` compiles fine for USB but breaks OTA builds — cost a session on
+2026-08-12. The script exists so that cannot recur.)
 
 **Frame of the published vector (verified against the dock field, 2026-09-02):**
 the vector is in the library's remapped body frame, **not** the chip's marked
