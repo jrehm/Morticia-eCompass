@@ -30,6 +30,24 @@ Tilt compensation uses navigation.attitude.roll/pitch, then
 Sign conventions are verified empirically against the fluxgate; the script reports the
 residual so a convention error shows up as a large scatter rather than passing silently.
 
+RESULTS ON THE 2026-09-02 SAIL (see summary doc, "Swing calibration prototype")
+-------------------------------------------------------------------------------
+  TCO correction alone      : heading scatter vs fluxgate 16.0 -> 8.5 deg
+  + circle fit (3 param)    : 10.4 deg   (worse)
+  + ellipse fit (5 param)   :  9.3 deg   (worse)
+Sector-balanced fitting (median per 10-deg heading bin, 35/36 bins populated) did not
+change that conclusion. The reason the swing fit does not help: after TCO correction the
+residual is NOT a hard-iron circle offset. Broken out by heading octant the error is
+deterministic (-7.8, -6.7, -1.0, +11.8, +14.3, +16.3, +1.9, -3.8 deg) with only 4-7 deg
+of scatter within each octant -- a ~24 deg peak-to-peak deviation curve.
+
+IMPORTANT CONFOUND: this script scores against the fluxgate, which is NOT absolute truth.
+The fluxgate is deployed with mounting offset 0 and its own deviation has never been
+characterized. The octant pattern above is the DIFFERENCE between two uncalibrated
+compasses and cannot be attributed to either one. Proceeding with deviation work requires
+an absolute reference -- GPS COG on a steady motoring circle in calm conditions is the
+practical option.
+
 USAGE
 -----
     python swing_calibration_prototype.py [csv_dir]
