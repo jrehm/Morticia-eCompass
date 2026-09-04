@@ -1,0 +1,47 @@
+{
+  "captured": "2026-09-04T15:53:53.002781Z",
+  "device": "192.168.8.214",
+  "info": {
+    "Build date": "Sep  2 2026 07:06:25",
+    "Hostname": "SensESP"
+  },
+  "thermal": {
+    "slope_deg_per_c": -0.17,
+    "tref_c": 30.4
+  },
+  "configs": {
+    "/sensors/hdg/offset": {
+      "offset": -0.261803,
+      "min_angle": 0
+    },
+    "/System/Signal K Settings": null,
+    "/System/WiFi Settings": null,
+    "/debounce/delay": {
+      "min_delay": 350
+    },
+    "/system/hostname": {
+      "value": "SensESP"
+    },
+    "/system/httpserver": {
+      "auth_required": false,
+      "username": "",
+      "ha1": ""
+    },
+    "/sensors/hdg/deviation": {
+      "samples": [
+        {
+          "input": 0,
+          "output": 0
+        },
+        {
+          "input": 3.14159,
+          "output": 3.14159
+        },
+        {
+          "input": 6.28318,
+          "output": 6.28318
+        }
+      ]
+    }
+  }
+}
