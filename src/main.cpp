@@ -782,8 +782,9 @@ void setup() {
       kSKPathMagInclination, kConfigPathNone, maginclination_metadata);
   maginclination->connect_to(maginclination_output);
 
-  // Calibrated geomagnetic field vector (uT), sensor/boat-frame axes (bow,
-  // starboard, down) -- not heading-compensated. Published at
+  // Calibrated geomagnetic field vector (uT), library body-frame axes
+  // (x=starboard, y=astern, z=down -- verified against the dock field
+  // 2026-09-02, see README) -- NOT temperature-compensated. Published at
   // MAG_VECTOR_REPORTING_INTERVAL_MS (1 Hz) per TODO.md "eCompass DC
   // Hard-Iron Drift" and handoffs/magnoise-instrumentation.md: averaged
   // over a window, the mean gives the DC disturbance vector directly
