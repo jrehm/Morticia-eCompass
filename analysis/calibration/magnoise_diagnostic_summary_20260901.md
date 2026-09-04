@@ -34,6 +34,47 @@ here because the retracted claims were confident and drove work):
 `~/bin/fluxq "<flux>"` on `halos` (reads the token from the `signalk-to-influxdb2` plugin
 config). Analysis script: `analysis/calibration/magvector_vs_temp.py`.
 
+## Absolute reference from motoring COG (2026-09-04) — the deviation is the FLUXGATE's
+
+The 09-02 sail included two pure-motoring legs (18:15–18:45 outbound, 19:55–20:35 inbound,
+sails down, so leeway ~0). GPS COG therefore gives an absolute heading reference, modulo
+current. Magnetic variation was steady at −7.68°. Filters: GPS COG/SOG freeze rows dropped
+(13.5% — the known freeze bug), SOG > 3 kn, steady turn rate. 1377 samples, 10 of 12 COG
+sectors.
+
+| COG sector | fluxgate error | eCompass (TCO+tilt) error | SOG |
+|---|---|---|---|
+| 45–90 | +8.4° | +1.5° | 9.1 kn |
+| 90–135 | −1.9° | −4.6° | 6.2 kn |
+| 135–180 | −14.3° | −4.4° | 3.3 kn |
+| 180–225 | −17.5° | +3.8° | 7.0 kn |
+| 225–270 | −17.4° | +2.6° | 5.1 kn |
+
+Fluxgate spans ~26° peak-to-peak (σ 13.1°); TCO-corrected eCompass ~11° (σ 8.1°).
+
+**Two current-robust arguments.** (1) Both compasses are scored against the *same* COG, so
+current error is common-mode and cancels in their difference. That difference ranges −6.9°
+to +20.5° across sectors — a 27° heading-dependent disagreement no current can explain.
+(2) Grid-searching every current up to 1.5 kn for the one most favourable to each compass:
+the eCompass reaches a 3.9° residual sector spread with a plausible 0.45 kn; the fluxgate
+reaches only 6.7° and needs 1.5 kn, railed at the bound.
+
+**Conclusion: the ~24° deviation curve seen in the swing prototype belongs mostly to the
+fluxgate, not the eCompass.** The fluxgate is deployed with mounting offset 0 and has never
+been swung. Once TCO compensation is in firmware, the 2026-08-19 decision to source
+`navigation.headingMagnetic` from the fluxgate should be revisited.
+
+*Not identifiable from this data:* a joint current + 5-coefficient deviation fit diverges
+(returns ~5 kn current, residuals worse than raw). With heading ≈ COG the two are nearly
+collinear and the 3–10 kn speed range gives too little leverage. Discard any such numbers;
+the bounded-sensitivity approach above is what this dataset supports.
+
+*Caveats:* single dataset, two legs, thin sectors (37–60 samples) at 135–180 and 225–270;
+current bounded but unmeasured (no STW sensor); eCompass figures use TCO applied in
+post-processing at 30–38 °C, where the correction is doing heavy lifting — uncorrected, the
+eCompass was the worse instrument. The hard-iron walk still threatens the eCompass over
+days in a way the fluxgate is not threatened.
+
 ## Onboard auto-calibration cannot run on the boat (2026-09-04)
 
 `fRunMagCalibration` needs 110 populated buffer bins for the 4-element solver, 330 for the
