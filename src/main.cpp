@@ -14,6 +14,7 @@
  */
 
 #include <memory>
+#include <vector>
 
 // Connectivity watchdog
 #include "esp_task_wdt.h"
@@ -872,6 +873,21 @@ void setup() {
     {kSKPathMagFieldVectorTCY, "Temperature-compensated field vector, astern (Y)",    "Mag Field BcTC Y", "BcTCY", 1},
     {kSKPathMagFieldVectorTCZ, "Temperature-compensated field vector, down (Z)",      "Mag Field BcTC Z", "BcTCZ", 2},
   };
+  // LIFETIME: these shared_ptrs must outlive the loop body. RepeatSensor's
+  // destructor unregisters its repeat event, and ValueProducer::connect_to()
+  // retains only the *consumer* (its observer lambda owns that shared_ptr) --
+  // nothing anywhere holds a strong reference to the producer. A sensor built
+  // as a loop-scoped local therefore hits refcount 0 at the end of its own
+  // iteration and is destroyed before it ever ticks, which is exactly why the
+  // first Phase 2a flash published headingMagneticTC but never
+  // magfieldvectortc.* (see handoffs/ecompass-tco-phase2a.md §1).
+  //
+  // Every other RepeatSensor in this file survives because it is a
+  // setup()-scope local and setup() never returns -- see the `while (true) {
+  // loop(); }` at the end of this function. `static` here does not depend on
+  // that, so this block stays correct if the tail loop is ever restructured.
+  static std::vector<std::shared_ptr<RepeatSensor<float>>> tc_vector_sensors;
+  tc_vector_sensors.reserve(sizeof(kTcAxes) / sizeof(kTcAxes[0]));
   for (const auto& ax : kTcAxes) {
     auto sensor = std::make_shared<RepeatSensor<float>>(
         MAG_VECTOR_REPORTING_INTERVAL_MS,
@@ -882,6 +898,7 @@ void setup() {
     meta->display_name_ = ax.disp;
     meta->short_name_ = ax.shrt;
     sensor->connect_to(std::make_shared<SKOutput<float>>(ax.path, kConfigPathNone, meta));
+    tc_vector_sensors.push_back(sensor);
   }
 
   auto heading_tc = std::make_shared<RepeatSensor<float>>(
