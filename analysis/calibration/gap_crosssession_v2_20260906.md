@@ -20,18 +20,30 @@ quoted.
 
 `SATS >= 6` and `0 < HDOP <= 5`, applied on top of underway + both-compasses-present.
 
+⚠️ **Null handling matters here, and the first version of this script got it wrong.**
+`SATS`/`HDOP` publish at ~1 Hz but drop the occasional tick — null runs are median 1 s, max
+3 s. Because `NaN >= 6` evaluates False in pandas, those rows were being silently discarded
+along with the genuinely bad ones, costing ~15% of each session for no reason. They are
+transport gaps, not fix loss: satellite count does not change meaningfully in 1–3 s, and
+those rows behave like good data (frozen rate 20–31%) rather than bad (91–95% for genuine
+`SATS<6`). Fixed by a short `ffill(limit=3)` before filtering, plus an explicit
+`SATS.notna()` step so nulls are dropped deliberately rather than by comparison semantics.
+
 | step | 08-26 | 09-02 |
 |---|---|---|
 | all rows | 8991 | 9000 |
 | underway (>500 m from dock) | 6627 (74%) | 5631 (63%) |
 | both compasses non-null | 5140 (57%) | 4320 (48%) |
-| `SATS>=6` | **3341 (37%)** | **3294 (37%)** |
-| `0<HDOP<=5` | 3341 | 3294 |
+| `SATS` present (after ffill) | 5140 | 4320 |
+| `SATS>=6` | **3874 (43%)** | **3837 (43%)** |
+| `0<HDOP<=5` | 3874 | 3837 |
 
-The fix-quality filter is expensive — it removes 35% of compass-paired rows on 08-26 and
-24% on 09-02 — but it is removing rows where the velocity solution is genuinely stale, not
-rows that merely look repetitive. `HDOP` adds nothing beyond `SATS`; the two are redundant
-here, so `SATS` alone is a sufficient filter.
+The fix-quality filter removes 25% of compass-paired rows on 08-26 and 11% on 09-02.
+`HDOP` adds nothing beyond `SATS`; the two are redundant here, so `SATS` alone suffices.
+
+**Validation that `SATS` is the right filter:** rows with a genuine `SATS<6` have a frozen
+velocity solution 91.5% (08-26) and 95.4% (09-02) of the time, against 4.9% and 7.7% for
+`SATS>=6`. The satellite count and the freeze are the same phenomenon.
 
 Session conditions, post-clean:
 
@@ -48,12 +60,12 @@ heading-only fit.
 
 | k | thermal | 08-26 | 09-02 |
 |---|---|---|---|
-| 1 | no | 6.04 | 9.75 |
-| 1 | yes | 5.59 | 8.00 |
-| 2 | no | 4.99 | 7.27 |
-| 2 | **yes** | **4.86** | **6.63** |
-| 3 | no | 4.97 | 7.09 |
-| 3 | yes | 4.81 | 6.23 |
+| 1 | no | 6.03 | 9.76 |
+| 1 | yes | 5.59 | 8.03 |
+| 2 | no | 4.99 | 7.28 |
+| 2 | **yes** | **4.86** | **6.65** |
+| 3 | no | 4.96 | 7.11 |
+| 3 | yes | 4.81 | 6.26 |
 
 The thermal term helps at every order, and more on the warmer session — as it should if it
 is capturing something physical. k=3 buys little over k=2; k=2 + thermal is the sensible
@@ -66,21 +78,21 @@ k=2 coefficients, without and with the thermal term:
 | | 08-26 | 09-02 | apart |
 |---|---|---|---|
 | **heading only** | | | |
-| A | −11.34 | −7.82 | 3.5 |
-| sin H | −25.14 | −31.30 | **6.2** |
-| cos H | −8.69 | −10.81 | 2.1 |
-| sin 2H | 5.03 | 9.65 | 4.6 |
+| A | −11.36 | −7.78 | 3.6 |
+| sin H | −25.14 | −31.25 | **6.1** |
+| cos H | −8.63 | −10.86 | 2.2 |
+| sin 2H | 4.98 | 9.62 | 4.6 |
 | **+ thermal** | | | |
-| A | −8.92 | −8.40 | 0.5 |
-| sin H | **−29.20** | **−29.09** | **0.11** |
-| cos H | −6.92 | −12.60 | 5.7 |
-| sin 2H | 4.64 | 8.36 | 3.7 |
-| dT | 0.51 | 0.84 | — |
-| dT·sin H | −0.87 | −1.40 | — |
+| A | −8.96 | −8.32 | 0.6 |
+| sin H | **−29.16** | **−29.04** | **0.12** |
+| cos H | −6.86 | −12.46 | 5.6 |
+| sin 2H | 4.59 | 8.39 | 3.8 |
+| dT | 0.50 | 0.83 | — |
+| dT·sin H | −0.86 | −1.39 | — |
 
 `sin H` is the dominant term at roughly −29°. Fitted independently on two sessions a week
 apart, at different wind directions and different temperatures, adding a thermal term brings
-them from 6.2° apart to **0.11° apart**. The `dT` and `dT·sin H` terms agree in sign and
+them from 6.1° apart to **0.12° apart**. The `dT` and `dT·sin H` terms agree in sign and
 rough magnitude across both.
 
 That is a meaningful result: it says a large part of what looked like session-to-session
@@ -96,10 +108,10 @@ Fit on one session, predict the other:
 
 | thermal | fit on | predict | bias | RMS |
 |---|---|---|---|---|
-| no | 08-26 | 09-02 | +5.15 | 10.54 |
-| no | 09-02 | 08-26 | −1.39 | 7.58 |
-| **yes** | 08-26 | 09-02 | +2.41 | **8.85** |
-| **yes** | 09-02 | 08-26 | −1.15 | **6.42** |
+| no | 08-26 | 09-02 | +5.21 | 10.59 |
+| no | 09-02 | 08-26 | −1.50 | 7.60 |
+| **yes** | 08-26 | 09-02 | +2.54 | **8.95** |
+| **yes** | 09-02 | 08-26 | −1.15 | **6.35** |
 
 The thermal term improves both directions. But **these are worse than the 5.30/6.30 RMS
 reported on 09-05**, and the earlier figures should be treated as optimistic artifacts of
@@ -108,20 +120,20 @@ of which sampled a narrower range of conditions than the full sessions do.
 
 **What this means for the collinearity claim.** The 09-05 conclusion — that the
 heading/TWA confound is broken by cross-session agreement — still holds directionally:
-biases are small (1–2° with thermal), the dominant coefficient now agrees to 0.11°, and
-pooled residual correlations are all negligible (TWA −0.066, ROLL −0.106, ETEMP −0.000,
-MROT −0.011). But the residual scatter is 6.4–8.9° out of sample, not 5–6°. A table deployed
+biases are small (1–2.5° with thermal), the dominant coefficient now agrees to 0.12°, and
+pooled residual correlations are all negligible (TWA −0.066, ROLL −0.106, ETEMP +0.000,
+MROT −0.009). But the residual scatter is 6.4–9.0° out of sample, not 5–6°. A table deployed
 from this would carry that error. It is not yet good enough to deploy.
 
 ## Pooled fit
 
 | | RMS | n |
 |---|---|---|
-| k=2, heading only | 6.96 | 6635 |
-| k=2 + thermal | **6.07** | 6635 |
+| k=2, heading only | 6.98 | 7711 |
+| k=2 + thermal | **6.08** | 7711 |
 
-Pooled thermal coefficients: `A=−8.15, sinH=−29.52, cosH=−10.54, sin2H=7.28, cos2H=2.35,
-dT=0.74, dT·sinH=−1.08, dT·cosH=0.07`.
+Pooled thermal coefficients: `A=−8.13, sinH=−29.52, cosH=−10.55, sin2H=7.27, cos2H=2.37,
+dT=0.74, dT·sinH=−1.07, dT·cosH=0.05`.
 
 ## What is now the binding constraint
 
@@ -129,13 +141,13 @@ Not collinearity — coverage. Pooled residual σ by heading bin:
 
 | heading | n | resid σ |
 |---|---|---|
-| 0–30° | 82 | **12.62** |
-| 150–180° | 637 | 8.12 |
-| 30–60° | 370 | 7.33 |
-| 240–270° | 164 | 5.71 |
-| (best bins) 270–330° | 867 | ~4.6 |
+| 0–30° | 90 | **12.48** |
+| 150–180° | ~738 | ~8.1 |
+| 30–60° | 433 | 7.23 |
+| 240–270° | 186 | ~5.7 |
+| (best bins) 270–330° | ~1007 | ~4.6 |
 
-The 0–30° bin has 82 samples pooled across both sessions and σ 12.6°. 240–270° has 164.
+The 0–30° bin has 90 samples pooled across both sessions and σ 12.5°. 240–270° has 186.
 These are the bins a race course rarely visits, and no amount of additional racing at
 similar wind directions will fill them efficiently.
 

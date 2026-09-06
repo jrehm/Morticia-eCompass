@@ -24,6 +24,13 @@ def load(f):
               'TWA','TWD','TWS','ROLL','MROT']:
         d[c] = pd.to_numeric(d[c], errors='coerce')
     d['ETEMP'] = d.ETEMP.ffill().bfill()          # ~0.25 Hz vs 1 Hz elsewhere
+    # SATS/HDOP publish at ~1 Hz but drop the odd tick: null runs are median 1 s,
+    # max 3 s. Those are transport gaps, not fix loss -- satellite count does not
+    # change meaningfully in 1-3 s. Without this they are silently discarded,
+    # because `NaN >= MIN_SATS` is False, costing ~15% of each session for no
+    # reason. Limit of 3 covers every observed run without bridging a real outage.
+    d['SATS'] = d.SATS.ffill(limit=3)
+    d['HDOP'] = d.HDOP.ffill(limit=3)
     lat0, lon0 = d.LAT.iloc[:60].median(), d.LON.iloc[:60].median()
     d['disp_m'] = np.sqrt(((d.LAT-lat0)*60)**2 +
                           ((d.LON-lon0)*60*np.cos(np.deg2rad(lat0)))**2) * 1852
@@ -34,7 +41,11 @@ def clean(d):
     steps = [('all rows', d)]
     d = d[d.disp_m > 500];                       steps.append(('underway', d))
     d = d[d.HDGmE.notna() & d.HDGmF.notna()];    steps.append(('both compasses', d))
-    d = d[(d.SATS >= MIN_SATS)];                 steps.append(('SATS>=%d' % MIN_SATS, d))
+    # Explicit about nulls: after the short ffill, any remaining NaN is a real
+    # gap, not a fix report of zero. Drop it deliberately rather than letting
+    # the >= comparison do it silently.
+    d = d[d.SATS.notna()];                       steps.append(('SATS present', d))
+    d = d[d.SATS >= MIN_SATS];                   steps.append(('SATS>=%d' % MIN_SATS, d))
     d = d[(d.HDOP > 0) & (d.HDOP <= MAX_HDOP)];  steps.append(('0<HDOP<=%.1f' % MAX_HDOP, d))
     return d.copy(), steps, n0
 
