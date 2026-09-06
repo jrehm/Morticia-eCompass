@@ -46,24 +46,52 @@ raw export, where the values are in range (raw `HDGmF` max = 356.72).
 cross-session fit in §2 is therefore unaffected: 09-02 came from the raw export, 08-26 from
 the cleaned file with only 1-dp rounding.
 
-### GPS freeze — cause now known
+### GPS freeze — cause known, and the fault is still active
 
 Of the 328 blanked `SOG` cells, 308 are bit-identical to the previous row; of 439 blanked
 `COGt` cells, 399 are. Root cause identified by Jeff 2026-09-05: **the GPS19 antenna sits
 near the mast base and a turning block intermittently lies on or near it**, shadowing the
 sky view. Not a data-pipeline fault. It accounts for the 08-26 tack asymmetry (82% of Port
 rows vs 3.9% Starboard — block position depends on tack), for power-cycling the receiver
-having no effect, and for LAT/LON persisting while COG/SOG froze. Antenna relocation is
-planned for fall 2026; until then the bit-identical-to-previous filter stays in the
-pipeline for all historical sessions.
+having no effect, and for LAT/LON persisting while COG/SOG froze.
+
+**This is not a closed historical issue.** The same signature is present at the dock on
+days with no sailing. Hours per day with fewer than 6 satellites ran 0–1 across 08-23→09-01,
+then 2–6 every day from 09-02 onward, including total loss of fix (0 satellites, HDOP 99)
+for five consecutive hours on 09-04. Satellite geometry is ruled out (outage windows drift
+*later* by hours per day; geometry repeats ~4 min *earlier*), as is wind acting directly
+(corr(AWS, sat count) = −0.238; two total-loss hours on 09-03 occurred in 5–6 kn).
+
+Working hypothesis is that the 09-02 evening pack-up left the block in a marginal position
+that wind shifts into place, after which it blocks regardless of wind. A bungee to hold it
+clear is the interim step; antenna relocation is the permanent fix. See `TODO.md` for the
+verification metric and the one caveat that doesn't fit cleanly (degradation on 09-02 began
+*before* the boat left the slip).
+
+Until the antenna is moved, the bit-identical-to-previous filter stays in the cleaning
+pipeline for all sessions.
+
+### ⚠️ Do not use `speedOverGround` to find sailing sessions
+
+A max-`SOG`-per-10-min scan of this bucket produced three **false-positive sessions**
+(09-04, 09-05, and a "09-02 afternoon" window) where the boat never left the dock. With the
+antenna fault active the GPS emits spurious speeds — 23.6 kn on 09-04 and 25.8 kn on 09-05
+while tied up, and 58.4 kn on 08-26.
+
+Use `navigation.position` displacement from the dock median instead; a bad velocity solution
+cannot fake it. Real sails show 3.67 nm (08-26) and 3.94 nm (09-02) against ~15 m of normal
+dock noise; the false positives were 200 m, 44 m and 0–7 m respectively.
+
 
 
 ## 2. The gap curve reproduces across two sessions at different TWD
 
 Both the 08-26 cleaned file and the 09-02 raw export carry `HDGmE` and `HDGmF`
-(2167 and 2311 paired samples after dropping nulls). Note the 08-10, 08-12 and 08-19 raw
-exports have **zero** non-null values on both columns — the unlanded `ca6891a` gap. Only
-these two sessions are usable.
+(2167 and 2311 paired samples after dropping nulls). The 08-10, 08-12 and 08-19 raw exports
+have **zero** non-null values on both columns — and that is not an exporter gap that can be
+fixed retroactively: both paths have their first row in InfluxDB at 2026-08-19 20:00 EDT,
+so the data was never recorded. (The exporter fix itself landed as
+`sailing-data-exporter@965e3e5`.) These two sessions are the only ones that exist.
 
 `gap = wrap(HDGmE − HDGmF)`, uncorrected eCompass path (`sensors.ecompass.headingMagnetic`,
 per `sailing-data-exporter/app.py` L82 — *not* the TC path, which did not exist yet).
@@ -181,3 +209,9 @@ Recorded because they were stated confidently before the repo was checked.
   within-heading-bin 2–6°.
 - **"Calibration drifted between 09-02 and now via auto-recal" — has a documented cause.**
   The 09-04 21z reflash cleared the buffer. Not a silent swap.
+- **"09-04 and 09-05 are TC-live sailing sessions worth exporting" — WRONG, caught by Jeff.**
+  No sailing occurred; the boat was moving on its lines. Found with a max-`SOG` scan, which
+  is the wrong detector when the GPS is emitting spurious speeds. See the `speedOverGround`
+  warning in §1. There is **no post-TC-flash sailing data at all**, so the ~35%
+  overcorrection in §3 stays characterised at one dock heading until the boat next sails.
+
