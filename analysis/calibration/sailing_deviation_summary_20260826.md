@@ -1,5 +1,9 @@
 # 2026-08-26 Race Session — eCompass Deviation Fit Summary (PRELIMINARY)
 
+> **Superseded.** Fitted from the Excel working copy; the 08-26 session is now available as a raw
+> export with both compass columns. See `gap_crosssession_v2_20260906.md` and `README.md`.
+
+
 **Preliminary, not the final table — and more limited than a first read suggests.** Second sailing-mode session (after 2026-08-12). Fit against `HDGmE` (eCompass raw heading), not `HDGt` -- see `clean_sailing_data_20260826.py` docstring for why that changed. Coverage gaps at 150-210 deg and 330-360 deg this session (different from 2026-08-12's 30-90/300-330 gaps -- together the two sessions are filling in different parts of the circle, still not the full 12 headings from either alone). TWA confound (below) is, if anything, stronger than 2026-08-12's.
 
 **Bigger caveat, discovered after the first pass:** a tack-correlated GPS malfunction during the race (see `sailing_data_quality_summary_20260826.md`) meant Jeff had to delete `COGt`/`SOG` on 82% of Port-tack rows vs. 3.9% of Starboard -- so the 744-row fit set below is 83.9% Starboard / 16.1% Port. This isn't just another coverage gap; it means the curve below is close to a single-tack measurement, and if there's any tack-asymmetric leeway (plausible given the trimaran's foils), it's baked into the curve with no way to separate it out this session. Treat the numbers below as "Starboard tack, this session" rather than as a general deviation estimate.

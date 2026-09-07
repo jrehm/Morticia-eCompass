@@ -1,5 +1,9 @@
 # Motoring-Configuration Deviation — Fit Summary (DIAGNOSTIC ONLY)
 
+> **Historical** (2026-08-10 motoring diagnostic; motoring table explicitly rejected).
+> See `README.md` for current state.
+
+
 **Not a firmware deliverable.** Engine was down and ~18in aft of its sailing position during collection -- a different hard-iron configuration than the original magfit calibration (engine up/forward). This curve characterizes deviation *in the motoring configuration* and exists to (a) validate the analysis pipeline against a case with a trustworthy heading reference, and (b) support the engine-position hypothesis for why today's data differs so much from the previously-logged 6-18 deg estimate. See `data_quality_summary.md` for data-quality detail.
 
 ## Model

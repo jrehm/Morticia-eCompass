@@ -1,5 +1,9 @@
 # 2026-08-26 Race Session — Data Quality Summary
 
+> **Largely superseded.** GPS row filtering now uses `SATS`/`HDOP` fix quality rather than the
+> bit-identical-to-previous heuristic. See `README.md` → Method notes.
+
+
 Source: `sailing_20260826_1855_to_1950_cleaned.csv` (Jeff's manually-tagged race-window export, Main/Headsail/Dagger/Tack-Gybe/PointOfSail added by hand -- same pattern as the 2026-07-29 log). Not the raw programmatic export (`sailing_20260826_185500_to_20260826_195000.csv`), which covers a wider window but has no per-row engine/sail state and, separately, has `HDGmE`/`HDGmF` essentially all-null (see below).
 Window: 2026-08-26 19:00:00 -> 2026-08-26 19:46:51 (2802 rows @ ~1s)
 Sail-configuration coverage: 100.0% of rows have Main/Headsail populated -- confirms this file is race/sailing throughout, no motor segment to exclude (unlike the 2026-08-12 session).

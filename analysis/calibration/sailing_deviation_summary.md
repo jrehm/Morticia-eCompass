@@ -1,5 +1,8 @@
 # Sailing-Configuration Deviation — Fit Summary (PRELIMINARY)
 
+> **Historical** (2026-08-12 session). See `README.md` for current state.
+
+
 **Preliminary, not the final table.** Single race session, engine up/forward (matches the original `magfit` position). Coverage gaps at 30-90 deg and 300-330 deg (see `sailing_data_quality_summary.md`), and a real TWA confound (below) mean this needs more sessions across different wind directions before it's a deployment candidate. See `morticia-project/handoffs/heading-deviation-table-investigation.md`.
 
 ## TWA confound check

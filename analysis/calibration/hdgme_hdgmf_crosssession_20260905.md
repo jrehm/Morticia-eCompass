@@ -1,5 +1,11 @@
 # Cross-Session `HDGmE`/`HDGmF` Gap + First In-Service Look at the TC Path (2026-09-05)
 
+> **Partly superseded.** §2 (cross-session fit) is superseded by `gap_crosssession_v2_20260906.md`
+> — those numbers used narrow windows and are optimistic. §3 ("~35% TC overcorrection") is wrong:
+> it attributed secular drift to temperature. §1 (file provenance, GPS freeze) remains current.
+> See `README.md`.
+
+
 Three things, from re-examining the 09-02 race export alongside 08-26 and pulling the
 live TC path from InfluxDB.
 

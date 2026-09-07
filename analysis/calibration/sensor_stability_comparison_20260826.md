@@ -1,5 +1,9 @@
 # eCompass vs. Fluxgate — Relative Stability Comparison (2026-08-26)
 
+> **Superseded** by the 2026-09-04 absolute heading reference, which measured both instruments
+> against GPS COG rather than against each other. See `README.md`.
+
+
 Prompted by Jeff: including whatever COGt data survived the GPS malfunction (mostly Starboard tack, per `sailing_data_quality_summary_20260826.md`), how do HDGmE and HDGmF compare *to each other*, and which looks more stable/correct? Both carry uncorrected mounting offsets, so this is a same-COG, same-timestamps comparison of internal consistency, not an accuracy verdict against ground truth.
 
 n = 1199 rows with COGt/HDGmE/HDGmF/SOG all present, SOG>=1kn (4 frozen-COG glitch rows excluded, n=1195 used below). Deliberately minimal filtering -- no steady-state rolling-std filter like the main pipeline uses, per Jeff's request to include the available COG data rather than the more conservative subset.

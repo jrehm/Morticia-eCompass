@@ -1,5 +1,8 @@
 # Motoring-Configuration Deviation Diagnostic — Data Quality Summary
 
+> **Historical** (2026-08-10 motoring diagnostic). See `README.md` for current state.
+
+
 Source: `sailing_20260810_153000_to_20260810_171000.csv`
 Window: 2026-08-10 15:40:00 -> 2026-08-10 17:09:59 (5400 rows @ ~1Hz)
 

@@ -1,5 +1,8 @@
 # Sailing-Configuration Deviation Diagnostic — Data Quality Summary
 
+> **Historical** (2026-08-12 session). See `README.md` for current state.
+
+
 Source: `sailing_20260812_174500_to_20260812_201500-1hz.csv`
 Window: 2026-08-12 17:45:00 -> 2026-08-12 20:14:59 (8993 rows @ ~1s)
 
