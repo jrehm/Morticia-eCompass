@@ -93,6 +93,44 @@ float SensorFusion::GetMagneticBcZ(void) {
   return sfg_->Mag.fBc[CHZ];
 }  // end GetMagneticBcZ()""",
     ),
+    dict(
+        name="OrientationSensorFusion: auto-recal gating (open guard)",
+        path="OrientationSensorFusion-ESP/src/fusion/magnetic.c",
+        marker="bAutoRecalAgreesWithIncumbent",
+        anchor="// the geomagnetic field strength must be in range (earth is 22uT to 67uT) with reasonable fit error",
+        insert="""
+        // LOCAL PATCH (scripts/apply_patches.py) -- auto-recal gating.
+        // Once a calibration is trusted (iValidMagCal != 0), require a candidate's
+        // field magnitude (ftrB) to be within kAutoRecalBTolFrac of the CURRENT
+        // INCUMBENT's fB before it is even considered for promotion. fB is a fixed
+        // calibration parameter, not a live measurement, and should not legitimately
+        // jump between solves. Demonstrated failure mode (2026-09 investigation,
+        // Morticia-eCompass analysis/calibration/): an underdetermined trial fit from
+        // near-level yaw-only data lands far off -- magfieldmagnitudetrial observed at
+        // 17.1-18.2 uT against a trusted ~48 uT -- while still passing this file's own
+        // generic Earth-wide sanity check (MINBFITUT/MAXBFITUT, 10-90 uT) and posting a
+        // competitive fit error. A first-ever calibration (iValidMagCal == 0, nothing
+        // trusted yet to compare against) is exempt and falls through unmodified.
+        bool bAutoRecalAgreesWithIncumbent = true;
+        if (pthisMagCal->iValidMagCal)
+        {
+            const float kAutoRecalBTolFrac = 0.15F;  // provisional -- widen only with cause
+            float fAutoRecalBLo = pthisMagCal->fB * (1.0F - kAutoRecalBTolFrac);
+            float fAutoRecalBHi = pthisMagCal->fB * (1.0F + kAutoRecalBTolFrac);
+            bAutoRecalAgreesWithIncumbent =
+                (pthisMagCal->ftrB >= fAutoRecalBLo) && (pthisMagCal->ftrB <= fAutoRecalBHi);
+        }
+        if (bAutoRecalAgreesWithIncumbent)
+        {""",
+    ),
+    dict(
+        name="OrientationSensorFusion: auto-recal gating (close guard)",
+        path="OrientationSensorFusion-ESP/src/fusion/magnetic.c",
+        marker="end auto-recal gating wrapper",
+        anchor="}       // end of test for new calibration within field strength and fit error limits",
+        insert="""
+        }       // LOCAL PATCH (scripts/apply_patches.py) -- end auto-recal gating wrapper""",
+    ),
 ]
 
 

@@ -261,6 +261,17 @@ The patches are:
    but no vector accessor; `sfg_->Mag.fBc[]` is the per-cycle calibrated
    (hard-/soft-iron corrected) field vector from `conditionSensorReadings()`.
    Published as `orientation.calibration.magfieldvector.{x,y,z}`.
+3. **OrientationSensorFusion-ESP** `src/fusion/magnetic.c` — auto-recalibration
+   gating. `fRunMagCalibration()`'s promotion check accepts a candidate
+   calibration if its field magnitude falls in a generic, Earth-wide 10–90 uT
+   range (`MINBFITUT`/`MAXBFITUT`) and its fit error is competitive — loose
+   enough that a badly underdetermined trial fit from near-level yaw-only
+   data can pass (observed live: |B| = 17.1–18.2 uT against this boat's
+   trusted ~48 uT). Once a calibration is trusted (`iValidMagCal != 0`), the
+   patch additionally requires a candidate's field magnitude to be within 15%
+   of the *current incumbent's* — layered on top of the stock check, not a
+   replacement for it. A first-ever calibration is unaffected. See
+   `morticia-project/handoffs/2026-09-11-auto-recal-gating.md`.
 
 If a library upgrade moves the anchors, the script prints the anchor it could
 not find and stops — rewrite that patch in `scripts/apply_patches.py` against

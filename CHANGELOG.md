@@ -15,6 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Auto-recalibration gating.** `OrientationSensorFusion-ESP` continuously
+  re-solves a candidate magnetic calibration every `CAL_INTERVAL_SECS` (5 min)
+  and can silently promote it over the trusted in-use one. Once a calibration
+  is trusted, a candidate is now also required to report a field magnitude
+  within 15% of the current incumbent's before it is even considered for
+  promotion — layered on top of the library's existing (very loose, 10-90 uT)
+  Earth-wide sanity check, not a replacement for it. A first-ever calibration
+  is unaffected. Local patch to `OrientationSensorFusion-ESP/src/fusion/
+  magnetic.c` via `scripts/apply_patches.py`; no `main.cpp` changes. Targets
+  the failure mode demonstrated live on 2026-09-03/04 and again 2026-09-11
+  (trial fits at |B| = 17.1-18.2 uT against a trusted ~48 uT, passing the
+  stock 10-90 uT check and a competitive fit error). Flash 90.8% -> 90.8%
+  (+48 bytes), RAM unchanged. See `morticia-project/handoffs/
+  2026-09-11-auto-recal-gating.md`.
+  Does **not** include Phase 2b (thermal correction inside the Kalman loop) —
+  deliberately deferred, see the handoff for why.
+
 ---
 
 ## [1.5.0] - 2026-09-02
