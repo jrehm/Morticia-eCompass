@@ -25,6 +25,7 @@
 #include "sensesp.h"
 #include "sensesp/sensors/sensor.h"
 #include "sensesp/signalk/signalk_output.h"
+#include "sensesp/signalk/signalk_ws_client.h"
 #include "sensesp/system/lambda_consumer.h"
 #include "sensesp_app_builder.h"
 
@@ -327,18 +328,45 @@ void setup() {
 
   // Disable WiFi modem sleep. The ESP32 Arduino core defaults to
   // WIFI_PS_MIN_MODEM power-save whenever station mode is up, which
-  // periodically turns the radio off between beacon intervals. For a
-  // long-lived, frequently-sending WS connection (SKWSClient) this caused
-  // intermittent transport_ws/websocket_client errno=2/9 errors (socket
-  // invalidated mid-use) forcing a reconnect every so often -- not a router
-  // or AP fault, since other devices on the same AP stayed connected
-  // throughout (2026-10-22 investigation). Hooked via WiFi.onEvent rather
-  // than called once after connect, so it re-applies on every reconnect too.
+  // periodically turns the radio off between beacon intervals -- a plausible
+  // contributor to the WS disconnects diagnosed below, though 2026-10-22
+  // monitoring after this was added showed no improvement (see the
+  // connection-state observer below, which logs the live sleep state at
+  // every actual disconnect instead of only at this one-time boot event).
   WiFi.onEvent([](WiFiEvent_t event) {
     if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
-      WiFi.setSleep(false);
+      bool ok = WiFi.setSleep(false);
+      ESP_LOGI(TAG, "WiFi.setSleep(false) result=%d, getSleep()=%d", ok,
+               WiFi.getSleep());
     }
   });
+
+  // Diagnostic (2026-10-22): correlate each real WS disconnect with heap/RSSI
+  // state. The errno=2/9 transport_ws/websocket_client failures recur with a
+  // fixed ~13-14ms write-poll -> read-poll gap across every captured
+  // occurrence -- too consistent to be a race between concurrent accesses
+  // (that would jitter); it reads as the client's own poll cadence
+  // discovering an already-dead socket twice in a row. No WiFi-level
+  // disconnect/reconnect event ever accompanies it (station stays
+  // associated throughout), and signalk-server logs nothing at the matching
+  // wall-clock times. That leaves local heap pressure, a TCP retransmit
+  // timeout from transient RF loss, or WiFi/lwIP task starvation. Hooking
+  // the actual disconnect (not the WiFi connect event above, which never
+  // refires once associated, so it can't see this) via SKWSClient's own
+  // ValueProducer<SKWSConnectionState> -- a public accessor
+  // (get_ws_client()), no library patch needed. A heap dip here points to
+  // resource pressure; a stable heap with normal RSSI points to retransmit
+  // timeout or task starvation instead.
+  sensesp_app->get_ws_client()->connect_to(
+      new LambdaConsumer<SKWSConnectionState>([](SKWSConnectionState state) {
+        if (state == SKWSConnectionState::kSKWSDisconnected) {
+          ESP_LOGW(TAG,
+                   "WS disconnected: free_heap=%u min_free_heap=%u rssi=%d "
+                   "wifi_sleep=%d",
+                   (unsigned)ESP.getFreeHeap(), (unsigned)ESP.getMinFreeHeap(),
+                   (int)WiFi.RSSI(), (int)WiFi.getSleep());
+        }
+      }));
 
   // ========== WATCHDOG SETUP ==========
   // Hardware watchdog: reboots if the main event loop stalls

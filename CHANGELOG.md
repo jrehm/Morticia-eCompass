@@ -17,6 +17,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.2] - 2026-10-22
+
+### Changed
+- **Diagnostic: hook the real WS disconnect event instead of the WiFi connect
+  event.** v1.6.1's `WiFi.setSleep()` logging (on `ARDUINO_EVENT_WIFI_STA_
+  CONNECTED`) never fired again after boot, because this symptom never
+  triggers an actual WiFi-level disconnect/reconnect -- the station stays
+  associated throughout, confirmed across two live-captured windows (12 and
+  9 occurrences respectively) with zero WiFi disconnect events among them.
+  Measured the write-poll -> read-poll failure gap precisely: 13-15 ms on
+  every single occurrence, too consistent to be a race between concurrent
+  accesses (ruled out as the explanation for the 1.7.0 bump's lack of
+  effect). Confirmed `esp_websocket_client` 1.7.0 is genuinely linked (its
+  own CHANGELOG.md in `.pio/libdeps` confirms), so the version bump itself
+  isn't the gap. Added an observer on `SKWSClient`'s own
+  `ValueProducer<SKWSConnectionState>` (`sensesp_app->get_ws_client()`, a
+  public accessor, no library patch) that logs free heap, min-ever-free
+  heap, RSSI, and WiFi sleep state at every actual disconnect, to
+  discriminate between local heap pressure, a TCP retransmit timeout from
+  transient RF loss, and WiFi/lwIP task starvation.
+
+---
+
+## [1.6.1] - 2026-10-22
+
+### Changed
+- **Diagnostic: log the actual result of `WiFi.setSleep(false)`.** The
+  `errno=2`/`errno=9` `transport_ws`/`websocket_client` reconnect pattern
+  that v1.6.0's modem-sleep fix targeted recurred afterward (3 fresh
+  occurrences caught live in a 4-minute window, ~1-2 min apart). Checked and
+  ruled out: Bluetooth/WiFi coexistence (this firmware never touches BT),
+  and `signalk-server`/the host (converted ESP32 uptime to wall-clock for
+  each event; nothing logged server-side at any of those times — the
+  disruption is on the client-to-AP radio link, not server-initiated). Left
+  open: whether `WiFi.setSleep(false)` is actually taking effect, since
+  there's no way to query live WiFi power-save state remotely. This change
+  logs `WiFi.setSleep()`'s return value and `WiFi.getSleep()` right after
+  the call, on every STA connect/reconnect, so the next occurrence can
+  confirm or rule out modem sleep directly instead of by inference.
+
+---
+
 ## [1.6.0] - 2026-10-22
 
 ### Fixed
