@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+---
+
+## [1.6.0] - 2026-10-22
+
 ### Fixed
 - **Auto-recalibration gating.** `OrientationSensorFusion-ESP` continuously
   re-solves a candidate magnetic calibration every `CAL_INTERVAL_SECS` (5 min)
@@ -31,7 +35,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (+48 bytes), RAM unchanged. See `morticia-project/handoffs/
   2026-09-11-auto-recal-gating.md`.
   Does **not** include Phase 2b (thermal correction inside the Kalman loop) —
-  deliberately deferred, see the handoff for why.
+  deliberately deferred, see the handoff for why. **Committed 2026-09-11,
+  first flashed to the boat in this release** — `morticia-project/TODO.md`
+  had carried this as still-blocking/not-yet-written; that note was stale.
+- **WiFi modem sleep left the connection flaky.** The ESP32 Arduino core
+  defaults to `WIFI_PS_MIN_MODEM` power-save in station mode, periodically
+  turning the radio off between beacon intervals. For this device's
+  long-lived, frequently-sending Signal K WS connection, that caused
+  intermittent `transport_ws`/`websocket_client` errno=2/9 errors (socket
+  invalidated mid-use), forcing a reconnect every so often — not a router/AP
+  fault; other devices on the same AP stayed connected throughout
+  (2026-10-22 investigation). Added `WiFi.onEvent(...)` in `main.cpp` to call
+  `WiFi.setSleep(false)` on every station connect/reconnect.
+- **Signal K path metadata silently dropped every reconnect.** This device's
+  bundled metadata (units/descriptions for all `orientation.calibration.*`
+  paths) needs 5438 B, but SensESP's default WS buffer
+  (`SENSESP_SK_WS_BUFFER_SIZE`) is 1024 B, so the metadata delta was dropped
+  every time ("Delta too large ... raise SENSESP_SK_WS_BUFFER_SIZE") and
+  Signal K never got `meta` for these paths. Raised to 8192 B via
+  `platformio.ini` build flag — RAM cost only (~124 KB free heap at last
+  check), not flash.
+
+### Changed
+- **SensESP 3.5.0 → 3.6.0**, and the project's own `esp_websocket_client` pin
+  (`[env:shesp32]` in `platformio.ini`) from the object_id URL that resolved
+  to 1.3.0 up to the versioned 1.7.0 archive, matching what SensESP 3.6.0
+  itself verified (`SignalK/SensESP#1078`). Prompted by the WiFi investigation
+  above: 1.3.0→1.7.0 fixes several race/use-after-free/stale-state bugs in
+  `esp_websocket_client` (see `espressif/esp-protocols` CHANGELOG.md for
+  1.6.0/1.6.1/1.7.0) that plausibly contributed to the same symptom, though
+  the TLS-specific race fixed in 1.6.1 doesn't apply here (`ssl_enabled:
+  false` on this device). Verified the local `get_http_server()` patch's
+  anchor line in `sensesp_app.h` is unchanged at 3.6.0 before bumping.
+  `BjarneBitscrambler/SignalK-Orientation`, `OrientationSensorFusion-ESP`,
+  and the two RobTillaart INA libraries checked against upstream and left
+  pinned — all already current.
 
 ---
 

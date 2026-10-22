@@ -16,6 +16,8 @@
 #include <memory>
 #include <vector>
 
+#include <WiFi.h>
+
 // Connectivity watchdog
 #include "esp_task_wdt.h"
 
@@ -322,6 +324,21 @@ void setup() {
 
   // Note: set_client_id() was a local SensESP patch removed in 3.3.1+.
   // SK source key is now derived from the hostname set in SensESPAppBuilder.
+
+  // Disable WiFi modem sleep. The ESP32 Arduino core defaults to
+  // WIFI_PS_MIN_MODEM power-save whenever station mode is up, which
+  // periodically turns the radio off between beacon intervals. For a
+  // long-lived, frequently-sending WS connection (SKWSClient) this caused
+  // intermittent transport_ws/websocket_client errno=2/9 errors (socket
+  // invalidated mid-use) forcing a reconnect every so often -- not a router
+  // or AP fault, since other devices on the same AP stayed connected
+  // throughout (2026-10-22 investigation). Hooked via WiFi.onEvent rather
+  // than called once after connect, so it re-applies on every reconnect too.
+  WiFi.onEvent([](WiFiEvent_t event) {
+    if (event == ARDUINO_EVENT_WIFI_STA_CONNECTED) {
+      WiFi.setSleep(false);
+    }
+  });
 
   // ========== WATCHDOG SETUP ==========
   // Hardware watchdog: reboots if the main event loop stalls
