@@ -17,6 +17,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.6.3] - 2026-10-23
+
+### Fixed
+- **No reconnect after a Signal K server restart (signalk-server >= 2.34).**
+  The server now sends a clean WebSocket close frame on shutdown (confirmed by
+  packet capture: `primus::server::close` text frame, close frame `88 00`, FIN).
+  `esp_websocket_client` answers by dispatching `WEBSOCKET_EVENT_CLOSED` -- never
+  `DISCONNECTED` -- and stopping its task. SensESP's event handler had no
+  `CLOSED` case, so `SKWSClient` stayed in `kSKWSConnected` forever: web UI and
+  `is_connected()` said Connected, every send failed with "Websocket client is
+  not connected", and the device never reconnected until rebooted. New local
+  SensESP patch (`scripts/apply_patches.py`) routes `CLOSED` to
+  `on_disconnected()`. Upstream report: SignalK/SensESP#937.
+- **Connectivity watchdog was blind to that state.** It trusted
+  `is_connected()`, which stayed true, so the 60 s reboot never fired. It now
+  also requires `is_transport_up()` (new local SensESP accessor wrapping
+  `esp_websocket_client_is_connected()`), so any future stuck-Connected state
+  costs at most ~60 s plus a reboot.
+
+---
+
 ## [1.6.2] - 2026-10-22
 
 ### Changed

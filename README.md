@@ -230,7 +230,9 @@ no code change needed.
 - **Connectivity watchdog (60s):** Monitors the Signal K WebSocket
   connection. Reboots if disconnected longer than 60 seconds — handles the
   edge case where `esp_websocket_client` fails to fire a disconnect callback
-  after a Signal K server restart.
+  after a Signal K server restart. Checks both SensESP's published state and
+  the real transport (`is_transport_up()`), since the former can stay
+  "Connected" with a dead socket.
 
 Timeouts are configurable via `HW_WATCHDOG_TIMEOUT_S` and
 `SK_CONNECTION_TIMEOUT_MS` in `src/main.cpp`.
@@ -272,6 +274,15 @@ The patches are:
    of the *current incumbent's* — layered on top of the stock check, not a
    replacement for it. A first-ever calibration is unaffected. See
    `morticia-project/handoffs/2026-09-11-auto-recal-gating.md`.
+4. **SensESP** `src/sensesp/signalk/signalk_ws_client.cpp` — handle
+   `WEBSOCKET_EVENT_CLOSED` like `DISCONNECTED`. signalk-server >= 2.34 sends a
+   close frame on restart; without this SensESP stays "Connected" with a dead
+   socket and never reconnects. **Remove when fixed upstream
+   (SignalK/SensESP#937).**
+5. **SensESP** `src/sensesp/signalk/signalk_ws_client.h` — public
+   `is_transport_up()` (wraps `esp_websocket_client_is_connected()`), used by
+   the connectivity watchdog in `main.cpp` as ground truth. Keep this one even
+   after #937 is fixed.
 
 If a library upgrade moves the anchors, the script prints the anchor it could
 not find and stops — rewrite that patch in `scripts/apply_patches.py` against

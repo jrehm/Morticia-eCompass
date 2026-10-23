@@ -393,7 +393,10 @@ void setup() {
 
     // Check Signal K connection health
     auto ws_client = sensesp_app->get_ws_client();
-    if (ws_client && ws_client->is_connected()) {
+    // is_connected() alone is not trustworthy: a server-sent close frame left
+    // it true with a dead transport (SignalK/SensESP#937). Require the
+    // underlying esp_websocket_client to agree.
+    if (ws_client && ws_client->is_connected() && ws_client->is_transport_up()) {
       last_sk_connected_ms = millis();
     } else {
       unsigned long disconnected_ms = millis() - last_sk_connected_ms;

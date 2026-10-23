@@ -131,6 +131,35 @@ float SensorFusion::GetMagneticBcZ(void) {
         insert="""
         }       // LOCAL PATCH (scripts/apply_patches.py) -- end auto-recal gating wrapper""",
     ),
+    dict(
+        name="SensESP: treat WEBSOCKET_EVENT_CLOSED as a disconnect",
+        path="SensESP/src/sensesp/signalk/signalk_ws_client.cpp",
+        marker="WEBSOCKET_EVENT_CLOSED",
+        anchor="case WEBSOCKET_EVENT_DISCONNECTED:",
+        insert="""
+    // LOCAL PATCH (scripts/apply_patches.py) -- a server-initiated close frame
+    // (signalk-server >= 2.34 sends one on shutdown/restart) makes
+    // esp_websocket_client dispatch CLOSED, never DISCONNECTED, and stop its
+    // task. Unhandled, SensESP stays in kSKWSConnected forever and never
+    // reconnects. Falls through to on_disconnected(). Upstream:
+    // SignalK/SensESP#937.
+    case WEBSOCKET_EVENT_CLOSED:""",
+    ),
+    dict(
+        name="SensESP: expose transport liveness",
+        path="SensESP/src/sensesp/signalk/signalk_ws_client.h",
+        marker="is_transport_up",
+        anchor="bool is_connected();",
+        insert="""
+  // LOCAL PATCH (scripts/apply_patches.py) -- ground truth from the underlying
+  // esp_websocket_client, independent of connection_state_. is_connected() can
+  // stay true while the transport is dead (see the CLOSED patch above); the
+  // connectivity watchdog in main.cpp checks both.
+  bool is_transport_up() {
+    auto h = client_.load();
+    return h != nullptr && esp_websocket_client_is_connected(h);
+  }""",
+    ),
 ]
 
 
