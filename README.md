@@ -163,15 +163,15 @@ firmware or auth problem.)
 ```bash
 # From the dev machine, build first, then:
 scp .pio/build/shesp32/firmware.bin halos:/tmp/ecompass-firmware.bin
-ssh halos "python3 /home/pi/espota.py -i 192.168.8.214 -a morticia \
+ssh halos "python3 ~/.platformio/packages/framework-arduinoespressif32/tools/espota.py -i 192.168.8.214 -a morticia \
     -f /tmp/ecompass-firmware.bin -r -d -t 30"
 ssh halos "rm -f /tmp/ecompass-firmware.bin"   # cleanup
 ```
 
-`espota.py` is already present on HALOS at `/home/pi/espota.py` (a standalone
-copy of the same script PlatformIO's `pio run -t upload` uses internally, from
-`~/.platformio/packages/framework-arduinoespressif32/tools/espota.py` —
-no PlatformIO install needed on HALOS itself, just Python 3, which HALOS has).
+`espota.py` is already present on HALOS inside the PlatformIO package at
+`~/.platformio/packages/framework-arduinoespressif32/tools/espota.py` (the same
+script `pio run -t upload` uses internally; it only needs Python 3). The old
+standalone `/home/pi/espota.py` copy was removed 2026-11-06.
 After flashing, sanity-check the device came back up, e.g.:
 
 ```bash
