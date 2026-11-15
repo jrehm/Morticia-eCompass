@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-magvector_vs_temp.py — DC magnetometer drift vs. die temperature from live InfluxDB.
+magvector_vs_temp.py — DC magnetometer drift vs. die temperature from live QuestDB.
 
 Pulls orientation.calibration.magfieldvector.{x,y,z}, die temperature, Kalman inclination,
-and eCompass/fluxgate headings from the signalk bucket on HALPI2 (via `ssh halos
-~/bin/fluxq`), then prints a half-hourly table and per-axis slopes dB/dT (uT/C).
+and eCompass/fluxgate headings from the QuestDB `signalk` table on HALPI2 (via analysis/skdata.py: ssh, or QUESTDB_URL),
+then prints a half-hourly table and per-axis slopes dB/dT (uT/C).
 
 Usage:
-  python magvector_vs_temp.py                  # since 2026-09-02T00:00Z (vector publish start)
+  python magvector_vs_temp.py                  # last 7 days
   python magvector_vs_temp.py 2026-09-03T00:00:00Z [stop_iso] [--window 30min]
+
+QuestDB history starts 2026-11-14; earlier ranges need the Influx-era data (not ported).
 
 Reading the output:
   - bx, by, bz  : calibrated field vector Bc in the sensor frame (uT). At the dock, +y carries
@@ -21,8 +23,13 @@ Reading the output:
                   is the thermal disturbance direction. Compare to the creep by looking at
                   the residual at a fixed temperature across days.
 """
-import subprocess, sys, io
+import sys
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 import numpy as np, pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import skdata
 
 PATHS = {
     'bx': 'orientation.calibration.magfieldvector.x',
@@ -34,33 +41,16 @@ PATHS = {
     'hF': 'sensors.fluxgate.headingMagnetic',
 }
 
-def fluxq(q):
-    return subprocess.run(['ssh', 'halos', f'~/bin/fluxq {q!r}'], capture_output=True, text=True, check=True).stdout
-
-def series(path, start, stop, every):
-    q = (f'from(bucket:"signalk") |> range(start: {start}, stop: {stop}) '
-         f'|> filter(fn: (r) => r._measurement == "{path}" and r._field == "value") '
-         f'|> aggregateWindow(every: {every}, fn: mean, createEmpty:false) |> keep(columns:["_time","_value"])')
-    raw = fluxq(q).replace('\r', '')
-    rows = [l.split(',') for l in raw.splitlines() if 'T' in l and not l.startswith(',result')]
-    t, v = [], []
-    for r in rows:
-        f = [c for c in r if c]
-        if len(f) < 2: continue
-        a, b = f[-2], f[-1]
-        ts, val = (a, b) if 'T' in a else (b, a)
-        t.append(ts); v.append(val)
-    s = pd.Series(pd.to_numeric(v, errors='coerce').astype(float), index=pd.to_datetime(t, utc=True, errors='coerce')).dropna()
-    return s.groupby(level=0).mean()
-
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    start = args[0] if args else '2026-09-02T00:00:00Z'
-    stop = args[1] if len(args) > 1 else 'now()'
+    argv = sys.argv[1:]
     window = '30min'
-    if '--window' in sys.argv: window = sys.argv[sys.argv.index('--window') + 1]
+    if '--window' in argv:
+        i = argv.index('--window'); window = argv[i + 1]; del argv[i:i + 2]
+    args = [a for a in argv if not a.startswith('--')]
+    start = args[0] if args else (datetime.now(timezone.utc) - timedelta(days=7)).strftime('%Y-%m-%dT%H:%M:%SZ')
+    stop = args[1] if len(args) > 1 else 'now'
     every = '5m'
-    df = pd.DataFrame({k: series(p, start, stop, every) for k, p in PATHS.items()}).dropna(subset=['bx', 'by', 'bz', 'temp'])
+    df = skdata.fetch_frame(PATHS, start, stop, every).dropna(subset=['bx', 'by', 'bz', 'temp'])
     if df.empty:
         print('no vector data in range'); return
     df['temp'] -= 273.15

@@ -1,29 +1,28 @@
 """
-Pull raw Signal K series from InfluxDB for the eCompass thermal-drift analysis
-and write a merged, unit-converted CSV to data/raw_merged.csv.
+Pull raw Signal K series from QuestDB for the eCompass thermal-drift analysis and write a
+merged, unit-converted CSV (default data/raw_merged.csv).
+
+QuestDB history starts 2026-11-14. For the July datasets use the scripts in influx-legacy/.
 
 Usage:
-    cp .env.example .env   # fill in INFLUXDB_TOKEN
     pip install -r requirements.txt
-    python pull_data.py
+    # on the Pi:   export QUESTDB_URL=http://localhost:9000
+    # elsewhere:   uses `ssh halos` (override with QUESTDB_SSH_HOST) or an ssh -L tunnel + QUESTDB_URL
+    python pull_data.py --start 2026-11-14T00:00:00Z [--stop now] [--out raw_merged.csv]
+
+The old pull_newloc.py / pull_recent.py were this script with different ranges/outputs:
+    --start 2026-07-30T13:00:00Z --out raw_newloc.csv
+    --start 2026-07-20T21:00:00Z --out raw_recent.csv
 """
 
-import os
+import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
-from influxdb_client import InfluxDBClient
 
-load_dotenv(Path(__file__).parent / ".env")
-
-INFLUXDB_URL = os.environ["INFLUXDB_URL"]
-INFLUXDB_TOKEN = os.environ["INFLUXDB_TOKEN"]
-INFLUXDB_ORG = os.environ["INFLUXDB_ORG"]
-INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "signalk")
-
-RANGE_START = "2026-07-08T00:00:00Z"
-RANGE_STOP = "2026-07-13T06:00:00Z"
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import skdata  # noqa: E402
 
 # sk_path -> (output column name, unit conversion fn)
 PATHS = {
@@ -38,41 +37,30 @@ PATHS = {
 }
 
 
-def fetch_path(client: InfluxDBClient, sk_path: str) -> pd.Series:
-    query = f"""
-    from(bucket: "{INFLUXDB_BUCKET}")
-      |> range(start: {RANGE_START}, stop: {RANGE_STOP})
-      |> filter(fn: (r) => r._measurement == "{sk_path}" and r._field == "value")
-      |> keep(columns: ["_time", "_value"])
-    """
-    df = client.query_api().query_data_frame(query, org=INFLUXDB_ORG)
-    if isinstance(df, list):
-        df = pd.concat(df, ignore_index=True) if df else pd.DataFrame(columns=["_time", "_value"])
-    if df.empty:
-        print(f"  WARNING: no data returned for {sk_path}")
-        return pd.Series(dtype=float, name=sk_path)
-    s = pd.Series(df["_value"].values, index=pd.to_datetime(df["_time"]), name=sk_path)
-    return s.sort_index()
-
-
 def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--start", required=True, help="ISO-8601 UTC start, e.g. 2026-11-14T00:00:00Z")
+    ap.add_argument("--stop", default="now", help="ISO-8601 UTC stop or 'now' (default)")
+    ap.add_argument("--out", default="raw_merged.csv", help="output file name inside data/")
+    args = ap.parse_args()
+
     out_dir = Path(__file__).parent / "data"
     out_dir.mkdir(exist_ok=True)
 
-    client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
     series = {}
     for sk_path, (col_name, convert) in PATHS.items():
         print(f"Fetching {sk_path} ...")
-        raw = fetch_path(client, sk_path)
+        raw = skdata.fetch_series(sk_path, args.start, args.stop)
         print(f"  {len(raw)} points")
+        if raw.empty:
+            print(f"  WARNING: no data returned for {sk_path}")
         series[col_name] = convert(raw) if not raw.empty else raw.rename(col_name)
-    client.close()
 
     merged = pd.DataFrame(series)
     merged.index.name = "time"
     merged = merged.sort_index()
 
-    raw_path = out_dir / "raw_merged.csv"
+    raw_path = out_dir / args.out
     merged.to_csv(raw_path)
     print(f"\nWrote {len(merged)} rows to {raw_path}")
     print(merged.describe())

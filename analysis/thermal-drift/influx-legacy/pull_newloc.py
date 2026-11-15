@@ -1,10 +1,11 @@
 """
-Pull recent Signal K series (2026-07-20 17:00 local -> now) to check whether
-the deployed thermal compensation coefficient (v1.3.2, slope -1.0211 deg/C,
-T_ref 30.0723 C) is still tracking correctly, per Jeff's Grafana observation.
+LEGACY (InfluxDB-era, pre 2026-11-14 data only; Influx is being retired). Needs the old
+.env (INFLUXDB_*) and `pip install influxdb-client python-dotenv`.
 
-Mirrors pull_data.py's PATHS/columns but writes to data/raw_recent.csv so it
-doesn't clobber the original 2026-07-08/13 dockside dataset.
+Pull data (2026-07-30 09:00 local -> now) from the RELOCATED eCompass
+sensor (second BRKT-STBC-AGM01, ~3ft from SensESP/battery via twisted-
+pair I2C -- see ADR-013) to check thermal behavior at the new location,
+separately from the prior raw_recent.csv (old, PCB-adjacent location).
 """
 
 import os
@@ -14,15 +15,15 @@ import pandas as pd
 from dotenv import load_dotenv
 from influxdb_client import InfluxDBClient
 
-load_dotenv(Path(__file__).parent / ".env")
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 INFLUXDB_URL = os.environ["INFLUXDB_URL"]
 INFLUXDB_TOKEN = os.environ["INFLUXDB_TOKEN"]
 INFLUXDB_ORG = os.environ["INFLUXDB_ORG"]
 INFLUXDB_BUCKET = os.environ.get("INFLUXDB_BUCKET", "signalk")
 
-# 2026-07-20 17:00 America/New_York (EDT, UTC-4) -> 21:00 UTC
-RANGE_START = "2026-07-20T21:00:00Z"
+# 2026-07-30 09:00 America/New_York (EDT, UTC-4) -> 13:00 UTC
+RANGE_START = "2026-07-30T13:00:00Z"
 RANGE_STOP = "now()"
 
 PATHS = {
@@ -55,7 +56,7 @@ def fetch_path(client: InfluxDBClient, sk_path: str) -> pd.Series:
 
 
 def main():
-    out_dir = Path(__file__).parent / "data"
+    out_dir = Path(__file__).parent.parent / "data"
     out_dir.mkdir(exist_ok=True)
 
     client = InfluxDBClient(url=INFLUXDB_URL, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG, timeout=300_000)
@@ -71,7 +72,7 @@ def main():
     merged.index.name = "time"
     merged = merged.sort_index()
 
-    raw_path = out_dir / "raw_recent.csv"
+    raw_path = out_dir / "raw_newloc.csv"
     merged.to_csv(raw_path)
     print(f"\nWrote {len(merged)} rows to {raw_path}")
     print(merged.describe())
